@@ -4,6 +4,10 @@
   "description": "Moltbot extensions for China IM platforms (DingTalk, WeCom, Feishu, QQ)",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "extensions/*"
+  ],
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",

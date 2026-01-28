@@ -110,6 +110,9 @@ export async function monitorDingtalkProvider(opts: MonitorDingtalkOpts = {}): P
         try {
           // 解析消息数据
           const rawMessage = JSON.parse(res.data) as DingtalkRawMessage;
+          if (res?.headers?.messageId) {
+            rawMessage.streamMessageId = res.headers.messageId;
+          }
           
           log(`[dingtalk] received message from ${rawMessage.senderId} (type=${rawMessage.msgtype})`);
           

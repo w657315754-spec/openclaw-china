@@ -11,6 +11,8 @@ export type { DingtalkConfig };
 export interface DingtalkRawMessage {
   /** 发送者 ID */
   senderId: string;
+  /** Stream 消息 ID（从 headers.messageId 透传） */
+  streamMessageId?: string;
   /** 发送者 staffId（部分事件提供） */
   senderStaffId?: string;
   /** 发送者 userId（部分事件提供） */

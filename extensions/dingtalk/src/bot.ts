@@ -47,8 +47,8 @@ export function parseDingtalkMessage(raw: DingtalkRawMessage): DingtalkMessageCo
   // 检查是否 @提及了机器人
   const mentionedBot = resolveMentionedBot(raw);
   
-  // 生成消息 ID（钉钉 Stream 消息没有独立 messageId，使用 conversationId + 时间戳）
-  const messageId = `${raw.conversationId}_${Date.now()}`;
+  // 使用 Stream 消息 ID（如果可用），确保去重稳定
+  const messageId = raw.streamMessageId ?? `${raw.conversationId}_${Date.now()}`;
   
   const senderId =
     raw.senderStaffId ??
