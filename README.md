@@ -2,10 +2,7 @@
 
 中国 IM 平台 Moltbot 扩展插件集合。
 
-⭐ 如果这个项目对你有帮助，请给个Star支持一下~
-
-
-> 🚧 **即将支持**：直接通过 `npm install @moltbot-china/dingtalk` 安装，无需手动复制文件和修改配置。
+⭐ 如果这个项目对你有帮助，请给个 Star 支持一下~
 
 ## 演示
 
@@ -23,32 +20,19 @@
 ## 安装
 
 ```bash
-git clone https://github.com/BytePioneer-AI/moltbot-china.git
-cd moltbot-china
-
-npm i -g pnpm
-pnpm install
+moltbot plugins install @moltbot-china/dingtalk
 ```
 
-## 钉钉插件配置
+## 钉钉配置
 
 > 📖 **[钉钉企业注册指南](doc/guides/dingtalk/configuration.md)** — 无需任何材料，最快 5 分钟完成配置
 
 
 在 Moltbot 配置文件 `/root/.clawdbot/clawdbot.json` 中添加钉钉渠道配置：
-
-```json
+```json5
 {
   "session": {
     "dmScope": "per-peer"
-  },
-  "plugins": {
-    "load": {
-      "paths": ["/path/to/moltbot-china/extensions/dingtalk"]
-    },
-    "entries": {
-      "dingtalk": { "enabled": true }
-    }
   },
   "channels": {
     "dingtalk": {
@@ -65,43 +49,44 @@ pnpm install
 }
 ```
 
-### 钉钉渠道配置
+### 重启 Gateway
 
-| 配置项 | 必填 | 默认值 | 说明 |
-|--------|:----:|--------|------|
-| `clientId` | ✅ | - | 钉钉开放平台应用 AppKey |
-| `clientSecret` | ✅ | - | 钉钉开放平台应用 AppSecret |
-| `dmPolicy` | | `pairing` | 私聊策略：`open`（任何人）/ `pairing`（需配对）/ `allowlist`（白名单） |
-| `groupPolicy` | | `allowlist` | 群聊策略：`open`（任何群）/ `allowlist`（白名单群）/ `disabled`（禁用） |
-| `requireMention` | | `true` | 群聊中是否需要 @机器人 才响应 |
-| `allowFrom` | | `[]` | 私聊白名单用户 ID 列表 |
-| `groupAllowFrom` | | `[]` | 群聊白名单群 ID 列表 |
+```bash
+moltbot gateway restart
+```
 
-### 会话配置（重要）
+## 配置选项
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `true` | 是否启用 |
+| `clientId` | - | 应用的 AppKey（必填） |
+| `clientSecret` | - | 应用的 AppSecret（必填） |
+| `dmPolicy` | `pairing` | 私聊策略：`open`（任何人）/ `pairing`（需配对）/ `allowlist`（白名单） |
+| `groupPolicy` | `allowlist` | 群聊策略：`open`（任何群）/ `allowlist`（白名单）/ `disabled`（禁用） |
+| `requireMention` | `true` | 群聊中是否需要 @机器人 |
+| `allowFrom` | `[]` | 私聊白名单用户 ID |
+| `groupAllowFrom` | `[]` | 群聊白名单群 ID |
+
+
+## 会话配置
 
 `session.dmScope` 控制不同用户的会话隔离方式：
 
 | 值 | 说明 |
 |----|------|
-| `main` | 默认值，所有用户共享同一会话（不推荐多用户场景） |
-| `per-peer` | **推荐**，按用户 ID 隔离，每个用户独立会话 |
-| `per-channel-peer` | 按渠道+用户隔离，适合多渠道多用户场景 |
-| `per-account-channel-peer` | 最细粒度，按账户+渠道+用户隔离 |
+| `main` | 所有用户共享同一会话（不推荐） |
+| `per-peer` | **推荐**，按用户 ID 隔离 |
+| `per-channel-peer` | 按渠道+用户隔离 |
 
 
-### 跨渠道身份关联（可选）
+## 开发
 
-如果同一用户在多个渠道使用，可以通过 `session.identityLinks` 关联身份，共享会话历史：
-
-```json
-{
-  "session": {
-    "dmScope": "per-peer",
-    "identityLinks": {
-      "alice": ["dingtalk:035004583157903146", "telegram:123456789"]
-    }
-  }
-}
+```bash
+git clone https://github.com/BytePioneer-AI/moltbot-china.git
+cd moltbot-china
+pnpm install
+pnpm build
 ```
 
 ## License
