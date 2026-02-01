@@ -4,6 +4,7 @@
  * 提供:
  * - uploadMediaDingtalk: 上传媒体到钉钉存储
  * - sendMediaDingtalk: 发送媒体消息
+ * - processLocalImagesInMarkdown: 解析并上传本地图片（支持 MEDIA: 前缀）
  * - FileSizeLimitError: 文件大小超限错误
  * - TimeoutError: 下载超时错误
  *
@@ -91,6 +92,27 @@ const REQUEST_TIMEOUT = 30000;
 
 /** 媒体上传超时时间（毫秒） */
 const UPLOAD_TIMEOUT = 60000;
+
+// Markdown 图片本地路径（含 MEDIA: 前缀）
+const LOCAL_IMAGE_RE =
+  /!\[([^\]]*)\]\(((?:file:\/\/\/|MEDIA:|attachment:\/\/\/)[^)]+|\/(?:tmp|var|private|Users|home|root)[^)]+|[A-Za-z]:[\\/][^)]+)\)/g;
+
+// 纯文本中的本地图片路径
+const BARE_IMAGE_PATH_RE =
+  /`?((?:\/(?:tmp|var|private|Users|home|root)\/[^\s`'",)]+|[A-Za-z]:[\\/][^\s`'",)]+)\.(?:png|jpg|jpeg|gif|bmp|webp))`?/gi;
+
+function toLocalPath(raw: string): string {
+  let p = raw;
+  if (p.startsWith("file://")) p = p.replace("file://", "");
+  else if (p.startsWith("MEDIA:")) p = p.replace("MEDIA:", "");
+  else if (p.startsWith("attachment://")) p = p.replace("attachment://", "");
+  try {
+    p = decodeURIComponent(p);
+  } catch {
+    // ignore decode errors
+  }
+  return p;
+}
 
 /**
  * 媒体上传结果
@@ -446,6 +468,72 @@ export async function sendMediaDingtalk(
       fileName: name,
     });
   }
+}
+
+/**
+ * 处理 Markdown 中的本地图片路径（含 MEDIA: 前缀），并替换为 media_id
+ */
+export async function processLocalImagesInMarkdown(params: {
+  text: string;
+  cfg: DingtalkConfig;
+  log?: Logger;
+}): Promise<string> {
+  const { text, cfg, log } = params;
+  let result = text;
+
+  const mdMatches = [...text.matchAll(LOCAL_IMAGE_RE)];
+  if (mdMatches.length > 0) {
+    log?.info?.(`[dingtalk] processing ${mdMatches.length} markdown images`);
+    for (const match of mdMatches) {
+      const [fullMatch, alt, rawPath] = match;
+      const cleanPath = rawPath.replace(/\\ /g, " ");
+      const localPath = toLocalPath(cleanPath);
+      if (!fs.existsSync(localPath)) {
+        log?.warn?.(`[dingtalk] local image not found: ${localPath}`);
+        continue;
+      }
+      const buffer = await fsPromises.readFile(localPath);
+      const fileName = path.basename(localPath);
+      const upload = await uploadMediaDingtalk({
+        cfg,
+        media: buffer,
+        fileName,
+        mediaType: "image",
+      });
+      result = result.replace(fullMatch, `![${alt}](${upload.mediaId})`);
+    }
+  }
+
+  const bareMatches = [...result.matchAll(BARE_IMAGE_PATH_RE)];
+  const newBareMatches = bareMatches.filter((m) => {
+    const idx = m.index ?? 0;
+    const before = result.slice(Math.max(0, idx - 10), idx);
+    return !before.includes("](");
+  });
+
+  if (newBareMatches.length > 0) {
+    log?.info?.(`[dingtalk] processing ${newBareMatches.length} bare image paths`);
+    for (const match of newBareMatches.reverse()) {
+      const [fullMatch, rawPath] = match;
+      const localPath = toLocalPath(rawPath);
+      if (!fs.existsSync(localPath)) {
+        log?.warn?.(`[dingtalk] local image not found: ${localPath}`);
+        continue;
+      }
+      const buffer = await fsPromises.readFile(localPath);
+      const fileName = path.basename(localPath);
+      const upload = await uploadMediaDingtalk({
+        cfg,
+        media: buffer,
+        fileName,
+        mediaType: "image",
+      });
+      const replacement = `![](${upload.mediaId})`;
+      result = result.slice(0, match.index!) + result.slice(match.index!).replace(fullMatch, replacement);
+    }
+  }
+
+  return result;
 }
 
 
@@ -849,6 +937,8 @@ export interface RichTextParseResult {
   imageCodes: string[];
   /** Mentioned user IDs */
   mentions: string[];
+  /** Ordered richText elements */
+  elements: RichTextElement[];
 }
 
 /**
@@ -954,6 +1044,7 @@ export function parseRichTextMessage(data: unknown): RichTextParseResult | null 
   const textParts: string[] = [];
   const imageCodes: string[] = [];
   const mentions: string[] = [];
+  const orderedElements: RichTextElement[] = [];
 
   // Process each element
   for (const element of richTextElements) {
@@ -967,6 +1058,7 @@ export function parseRichTextMessage(data: unknown): RichTextParseResult | null 
     // Some DingTalk richText elements omit "type" for text nodes.
     if (!elementType && hasText) {
       textParts.push(element.text as string);
+      orderedElements.push({ type: "text", text: element.text as string });
       continue;
     }
 
@@ -975,6 +1067,7 @@ export function parseRichTextMessage(data: unknown): RichTextParseResult | null 
         // Extract text content
         if (hasText) {
           textParts.push(element.text as string);
+          orderedElements.push({ type: "text", text: element.text as string });
         }
         break;
 
@@ -983,6 +1076,7 @@ export function parseRichTextMessage(data: unknown): RichTextParseResult | null 
         const code = element.downloadCode || element.pictureDownloadCode;
         if (typeof code === "string" && code) {
           imageCodes.push(code);
+          orderedElements.push({ type: "picture", downloadCode: code });
         }
         break;
       }
@@ -991,6 +1085,7 @@ export function parseRichTextMessage(data: unknown): RichTextParseResult | null 
         // Extract user ID (singular, as per DingTalk API)
         if (typeof element.userId === "string" && element.userId) {
           mentions.push(element.userId);
+          orderedElements.push({ type: "at", userId: element.userId });
         }
         break;
     }
@@ -1000,6 +1095,7 @@ export function parseRichTextMessage(data: unknown): RichTextParseResult | null 
     textParts,
     imageCodes,
     mentions,
+    elements: orderedElements,
   };
 }
 

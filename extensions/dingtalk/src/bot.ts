@@ -14,6 +14,7 @@ import {
   downloadDingTalkFile,
   parseRichTextMessage,
   downloadRichTextImages,
+  processLocalImagesInMarkdown,
   cleanupFile,
   type DownloadedFile,
   type ExtractedFileInfo,
@@ -22,6 +23,130 @@ import {
 import { getAccessToken } from "./client.js";
 import { createAICard, streamAICard, finishAICard, type AICardInstance } from "./card.js";
 import { createLogger, type Logger, checkDmPolicy, checkGroupPolicy, resolveFileCategory } from "@openclaw-china/shared";
+
+function resolveGatewayAuthFromConfigFile(logger: Logger): string | undefined {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const os = require("os");
+    const home = os.homedir();
+    const candidates = [
+      path.join(home, ".openclaw", "openclaw.json"),
+      path.join(home, ".openclaw", "config.json"),
+    ];
+    for (const filePath of candidates) {
+      if (!fs.existsSync(filePath)) continue;
+      const raw = fs.readFileSync(filePath, "utf8");
+      const cleaned = raw.replace(/^\uFEFF/, "").trim();
+      const cfg = JSON.parse(cleaned) as Record<string, unknown>;
+      const gateway = (cfg.gateway as Record<string, unknown> | undefined) ?? {};
+      const auth = (gateway.auth as Record<string, unknown> | undefined) ?? {};
+      const mode = typeof auth.mode === "string" ? auth.mode : "";
+      const token = typeof auth.token === "string" ? auth.token : "";
+      const password = typeof auth.password === "string" ? auth.password : "";
+      if (mode === "token" && token) return token;
+      if (mode === "password" && password) return password;
+      if (token) return token;
+      if (password) return password;
+    }
+  } catch (err) {
+    logger.debug(`[gateway] failed to read openclaw config: ${String(err)}`);
+  }
+  return undefined;
+}
+
+function resolveGatewayRequestParams(
+  runtime: unknown,
+  dingtalkCfg: DingtalkConfig,
+  logger: Logger
+): { gatewayUrl: string; headers: Record<string, string> } {
+  const runtimeRecord = runtime as Record<string, unknown>;
+  const gateway = runtimeRecord?.gateway as Record<string, unknown> | undefined;
+  const gatewayPort = typeof gateway?.port === "number" ? gateway.port : 18789;
+  const gatewayUrl =
+    typeof gateway?.url === "string"
+      ? gateway.url
+      : `http://127.0.0.1:${gatewayPort}/v1/chat/completions`;
+  const authToken =
+    dingtalkCfg.gatewayToken ??
+    dingtalkCfg.gatewayPassword ??
+    (gateway?.auth as Record<string, unknown> | undefined)?.token ??
+    (gateway as Record<string, unknown> | undefined)?.authToken ??
+    (gateway as Record<string, unknown> | undefined)?.token ??
+    process.env.OPENCLAW_GATEWAY_TOKEN ??
+    process.env.OPENCLAW_GATEWAY_PASSWORD ??
+    resolveGatewayAuthFromConfigFile(logger);
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (typeof authToken === "string" && authToken.trim()) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  } else {
+    logger.warn("[gateway] auth token not found; request may be rejected");
+  }
+
+  return { gatewayUrl, headers };
+}
+
+async function* streamFromGateway(params: {
+  runtime: unknown;
+  sessionKey: string;
+  userContent: string;
+  logger: Logger;
+  dingtalkCfg: DingtalkConfig;
+  abortSignal?: AbortSignal;
+}): AsyncGenerator<string, void, unknown> {
+  const { runtime, sessionKey, userContent, logger, dingtalkCfg, abortSignal } = params;
+  const { gatewayUrl, headers } = resolveGatewayRequestParams(runtime, dingtalkCfg, logger);
+
+  logger.debug(`[gateway] streaming via ${gatewayUrl}, session=${sessionKey}`);
+
+  const response = await fetch(gatewayUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: "default",
+      messages: [{ role: "user", content: userContent }],
+      stream: true,
+      user: sessionKey,
+    }),
+    signal: abortSignal,
+  });
+
+  if (!response.ok || !response.body) {
+    const errText = response.body ? await response.text() : "(no body)";
+    throw new Error(`Gateway error: ${response.status} - ${errText}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (data === "[DONE]") return;
+      try {
+        const chunk = JSON.parse(data);
+        const content = (chunk as Record<string, unknown>)?.choices?.[0]?.delta?.content;
+        if (typeof content === "string" && content) {
+          yield content;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+}
 
 /**
  * 解析钉钉原始消息为标准化的消息上下文
@@ -217,11 +342,16 @@ async function handleAICardStreaming(params: {
 }): Promise<void> {
   const { card, cfg, route, inboundCtx, dingtalkCfg, targetId, chatType, logger } = params;
   let accumulated = "";
+  const streamStartAt = Date.now();
+  const streamStartIso = new Date(streamStartAt).toISOString();
+  let firstChunkAt: number | null = null;
+  let chunkCount = 0;
+  let lastChunkLogAt = 0;
 
   try {
     const core = getDingtalkRuntime();
     let lastUpdateTime = 0;
-    const updateInterval = 300; // 最小更新间�?ms
+    const updateInterval = 100; // 最小更新间隔 ms
     const firstFrameContent = " ";
     let firstFrameSent = false;
 
@@ -233,103 +363,41 @@ async function handleAICardStreaming(params: {
       logger.debug(`failed to send first frame: ${String(err)}`);
     }
 
-    // 创建回复分发�?
-    const coreChannel = (core as Record<string, unknown>)?.channel as Record<string, unknown> | undefined;
-    const replyApi = coreChannel?.reply as Record<string, unknown> | undefined;
-
-    const humanDelay = (replyApi?.resolveHumanDelayConfig as ((cfg: unknown, agentId?: string) => unknown) | undefined)?.(
-      cfg,
-      route.agentId
-    );
-
-    const createDispatcherWithTyping = replyApi?.createReplyDispatcherWithTyping as
-      | ((opts: Record<string, unknown>) => Record<string, unknown>)
-      | undefined;
-    const createDispatcher = replyApi?.createReplyDispatcher as
-      | ((opts: Record<string, unknown>) => Record<string, unknown>)
-      | undefined;
-
-    const dispatcherResult = createDispatcherWithTyping
-      ? createDispatcherWithTyping({
-          deliver: async (payload: unknown) => {
-            let text = "";
-            if (typeof payload === "object" && payload !== null && "text" in payload) {
-              const textValue = (payload as Record<string, unknown>)["text"];
-              text = typeof textValue === "string" ? textValue : "";
-            }
-            if (!text.trim()) return;
-
-            accumulated += text;
-
-            // 节流更新，避免过于频�?
-            const now = Date.now();
-            if (!firstFrameSent || now - lastUpdateTime >= updateInterval) {
-              await streamAICard(card, accumulated, false, (msg) => logger.debug(msg));
-              lastUpdateTime = now;
-              firstFrameSent = true;
-            }
-          },
-          humanDelay,
-          onError: (err: unknown, info: { kind: string }) => {
-            logger.error(`${info.kind} reply failed: ${String(err)}`);
-          },
-        })
-      : {
-          dispatcher: createDispatcher?.({
-            deliver: async (payload: unknown) => {
-              let text = "";
-              if (typeof payload === "object" && payload !== null && "text" in payload) {
-                const textValue = (payload as Record<string, unknown>)["text"];
-                text = typeof textValue === "string" ? textValue : "";
-              }
-            if (!text.trim()) return;
-
-            accumulated += text;
-
-            const now = Date.now();
-            if (!firstFrameSent || now - lastUpdateTime >= updateInterval) {
-              await streamAICard(card, accumulated, false, (msg) => logger.debug(msg));
-              lastUpdateTime = now;
-              firstFrameSent = true;
-            }
-          },
-            humanDelay,
-            onError: (err: unknown, info: { kind: string }) => {
-              logger.error(`${info.kind} reply failed: ${String(err)}`);
-            },
-          }),
-          replyOptions: {},
-          markDispatchIdle: () => undefined,
-        };
-
-    const dispatcher = (dispatcherResult as Record<string, unknown>)?.dispatcher as Record<string, unknown> | undefined;
-    if (!dispatcher) {
-      logger.debug("dispatcher not available");
-      return;
-    }
-
-    // 分发消息
-    const dispatchReplyFromConfig = replyApi?.dispatchReplyFromConfig as
-      | ((opts: Record<string, unknown>) => Promise<Record<string, unknown>>)
-      | undefined;
-
-    if (!dispatchReplyFromConfig) {
-      logger.debug("dispatchReplyFromConfig not available");
-      return;
-    }
-
-    const result = await dispatchReplyFromConfig({
-      ctx: inboundCtx,
-      cfg,
-      dispatcher,
-      replyOptions: (dispatcherResult as Record<string, unknown>)?.replyOptions ?? {},
-    });
-
-    const markDispatchIdle = (dispatcherResult as Record<string, unknown>)?.markDispatchIdle as (() => void) | undefined;
-    markDispatchIdle?.();
-
-    const counts = (result as Record<string, unknown>)?.counts as Record<string, unknown> | undefined;
-    logger.debug(`dispatch complete (replies=${counts?.final ?? 0})`);
+      for await (const chunk of streamFromGateway({
+        runtime: core,
+        sessionKey: route.sessionKey,
+        userContent: inboundCtx.Body,
+        logger,
+        dingtalkCfg,
+      })) {
+        accumulated += chunk;
+        chunkCount += 1;
+        if (!firstChunkAt) {
+          firstChunkAt = Date.now();
+          const firstChunkIso = new Date(firstChunkAt).toISOString();
+          logger.debug(
+            `[stream] first chunk at ${firstChunkIso} (after ${firstChunkAt - streamStartAt}ms, len=${chunk.length}, start=${streamStartIso})`
+          );
+        } else {
+          const nowLog = Date.now();
+          if (nowLog - lastChunkLogAt >= 1000) {
+            logger.debug(
+              `[stream] chunks=${chunkCount} totalLen=${accumulated.length} dt=${nowLog - streamStartAt}ms`
+            );
+            lastChunkLogAt = nowLog;
+          }
+        }
+        const now = Date.now();
+        if (!firstFrameSent || now - lastUpdateTime >= updateInterval) {
+          await streamAICard(card, accumulated, false, (msg) => logger.debug(msg));
+          lastUpdateTime = now;
+          firstFrameSent = true;
+          const pushIso = new Date(now).toISOString();
+          logger.debug(
+            `[stream] pushed update at ${pushIso} (len=${accumulated.length}, dt=${now - streamStartAt}ms, start=${streamStartIso})`
+          );
+        }
+      }
 
     // 完成卡片
     await finishAICard(card, accumulated, (msg) => logger.debug(msg));
@@ -629,12 +697,33 @@ export async function handleDingtalkMessage(params: {
             
             logger.debug(`downloaded ${downloadedRichTextImages.length}/${richTextParseResult.imageCodes.length} richText images`);
           }
-          
-          // 设置消息正文为拼接的文本
-          if (richTextParseResult.textParts.length > 0) {
+
+          const orderedLines: string[] = [];
+          const imageQueue = [...downloadedRichTextImages];
+
+          for (const element of richTextParseResult.elements ?? []) {
+            if (!element) continue;
+            if (element.type === "picture") {
+              const file = imageQueue.shift();
+              orderedLines.push(file?.path ?? "[图片]");
+              continue;
+            }
+            if (element.type === "text" && typeof element.text === "string") {
+              orderedLines.push(element.text);
+              continue;
+            }
+            if (element.type === "at" && typeof element.userId === "string") {
+              orderedLines.push(`@${element.userId}`);
+              continue;
+            }
+          }
+
+          if (orderedLines.length > 0) {
+            mediaBody = orderedLines.join("\n");
+          } else if (richTextParseResult.textParts.length > 0) {
             mediaBody = richTextParseResult.textParts.join("\n");
           } else if (downloadedRichTextImages.length > 0) {
-            // 如果只有图片没有文本，设置为图片描述
+            // 兜底：如果只有图片没有文本，设置为图片描述
             mediaBody = downloadedRichTextImages.length === 1 
               ? "[图片]" 
               : `[${downloadedRichTextImages.length}张图片]`;
@@ -777,11 +866,17 @@ export async function handleDingtalkMessage(params: {
         rawText,
         tableMode
       ) ?? rawText;
+
+      const processed = await processLocalImagesInMarkdown({
+        text: converted,
+        cfg: dingtalkCfgResolved,
+        log: logger,
+      });
       
       const chunks =
         textApi?.chunkTextWithMode && typeof textChunkLimitResolved === "number" && textChunkLimitResolved > 0
-          ? (textApi.chunkTextWithMode as (text: string, limit: number, mode: unknown) => string[])(converted, textChunkLimitResolved, chunkMode)
-          : [converted];
+          ? (textApi.chunkTextWithMode as (text: string, limit: number, mode: unknown) => string[])(processed, textChunkLimitResolved, chunkMode)
+          : [processed];
 
       for (const chunk of chunks) {
         await sendMessageDingtalk({

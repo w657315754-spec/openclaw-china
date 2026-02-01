@@ -101,6 +101,7 @@ export const dingtalkPlugin = {
     edit: false,
     reply: true,
     polls: false,
+    blockStreaming: false,
   },
 
   /**
@@ -123,6 +124,8 @@ export const dingtalkPlugin = {
         historyLimit: { type: "integer", minimum: 0 },
         textChunkLimit: { type: "integer", minimum: 1 },
         enableAICard: { type: "boolean" },
+        gatewayToken: { type: "string" },
+        gatewayPassword: { type: "string" },
       },
     },
   },

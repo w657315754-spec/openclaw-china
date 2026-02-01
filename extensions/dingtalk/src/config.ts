@@ -51,6 +51,12 @@ export const DingtalkConfigSchema = z.object({
   
   /** 是否启用 AI Card 流式响应 */
   enableAICard: z.boolean().optional().default(true),
+
+  /** Gateway auth token（Bearer） */
+  gatewayToken: z.string().optional(),
+
+  /** Gateway auth password（替代 gatewayToken） */
+  gatewayPassword: z.string().optional(),
   
   /** 媒体文件大小限制 (MB)，默认 100MB */
   maxFileSizeMB: z.number().positive().optional().default(100),
