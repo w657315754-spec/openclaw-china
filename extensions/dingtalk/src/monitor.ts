@@ -6,6 +6,9 @@
  */
 
 import { DWClient, TOPIC_ROBOT } from "dingtalk-stream";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createDingtalkClientFromConfig } from "./client.js";
 import { handleDingtalkMessage } from "./bot.js";
 import type { DingtalkConfig } from "./config.js";
@@ -31,6 +34,68 @@ export interface MonitorDingtalkOpts {
   abortSignal?: AbortSignal;
   /** 账户 ID */
   accountId?: string;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+async function ensureGatewayHttpEnabled(params: {
+  dingtalkCfg?: DingtalkConfig;
+  logger: Logger;
+}): Promise<void> {
+  const { dingtalkCfg, logger } = params;
+  if (!dingtalkCfg?.enableAICard) return;
+
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, ".openclaw", "openclaw.json"),
+    path.join(home, ".openclaw", "config.json"),
+  ];
+
+  for (const filePath of candidates) {
+    try {
+      await fs.access(filePath);
+    } catch {
+      continue;
+    }
+
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const cleaned = raw.replace(/^\uFEFF/, "").trim();
+      if (!cleaned) continue;
+
+      const cfg = JSON.parse(cleaned) as Record<string, unknown>;
+      const gateway = toRecord(cfg.gateway);
+      const http = toRecord(gateway.http);
+      const endpoints = toRecord(http.endpoints);
+      const chatCompletions = toRecord(endpoints.chatCompletions);
+
+      if (chatCompletions.enabled === true) {
+      logger.debug(`[gateway] chatCompletions already enabled in ${filePath}`);
+      return;
+      }
+
+      chatCompletions.enabled = true;
+      endpoints.chatCompletions = chatCompletions;
+      http.endpoints = endpoints;
+      gateway.http = http;
+      cfg.gateway = gateway;
+
+      const output = JSON.stringify(cfg, null, 2);
+      await fs.writeFile(filePath, `${output}\n`, "utf8");
+      logger.info(`[gateway] enabled http.endpoints.chatCompletions in ${filePath}`);
+      logger.info("[gateway] restart OpenClaw gateway to apply HTTP endpoint change");
+      return;
+    } catch (err) {
+      logger.warn(`[gateway] failed to update ${filePath}: ${String(err)}`);
+    }
+  }
+
+  logger.warn("[gateway] openclaw config not found; cannot auto-enable http endpoint");
 }
 
 /** 当前活跃的 Stream 客户端 */
@@ -80,6 +145,8 @@ export async function monitorDingtalkProvider(opts: MonitorDingtalkOpts = {}): P
   if (!dingtalkCfg) {
     throw new Error("DingTalk configuration not found");
   }
+
+  await ensureGatewayHttpEnabled({ dingtalkCfg, logger });
 
   // Create Stream client.
   let client: DWClient;

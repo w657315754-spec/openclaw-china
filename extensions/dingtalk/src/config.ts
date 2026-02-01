@@ -58,12 +58,6 @@ export const DingtalkConfigSchema = z.object({
   /** Gateway auth password（替代 gatewayToken） */
   gatewayPassword: z.string().optional(),
 
-  /** 流式输出源: "gateway-ws" (WebSocket) | "gateway-sse" (HTTP SSE) */
-  streamSource: z.enum(["gateway-sse", "gateway-ws"]).optional().default("gateway-ws"),
-
-  /** Gateway WebSocket URL，默认 ws://127.0.0.1:18789 */
-  gatewayWsUrl: z.string().optional(),
-  
   /** 媒体文件大小限制 (MB)，默认 100MB */
   maxFileSizeMB: z.number().positive().optional().default(100),
   

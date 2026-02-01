@@ -22,8 +22,6 @@
       "enableAICard": { "type": "boolean" },
       "gatewayToken": { "type": "string" },
       "gatewayPassword": { "type": "string" },
-      "streamSource": { "type": "string", "enum": ["gateway-sse", "gateway-ws"] },
-      "gatewayWsUrl": { "type": "string" },
       "maxFileSizeMB": { "type": "number", "minimum": 1 }
     }
   },

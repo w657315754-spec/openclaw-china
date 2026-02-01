@@ -25,7 +25,6 @@ import {
 import { getAccessToken } from "./client.js";
 import { createAICard, streamAICard, finishAICard, type AICardInstance } from "./card.js";
 import { createLogger, type Logger, checkDmPolicy, checkGroupPolicy, resolveFileCategory } from "@openclaw-china/shared";
-import { getGatewayWsClient } from "./gateway-ws.js";
 
 const NON_IMAGE_EXTENSIONS = new Set([
   "pdf",
@@ -321,51 +320,6 @@ async function* streamFromGateway(params: {
 }
 
 /**
- * 通过 Gateway WebSocket 获取流式响应
- */
-async function* streamFromGatewayWs(params: {
-  runtime: unknown;
-  sessionKey: string;
-  userContent: string;
-  logger: Logger;
-  dingtalkCfg: DingtalkConfig;
-}): AsyncGenerator<string, void, unknown> {
-  const { runtime, sessionKey, userContent, logger, dingtalkCfg } = params;
-
-  // 复用 SSE 的 auth 解析逻辑，确保 fallback 一致
-  const { gatewayUrl } = resolveGatewayRequestParams(runtime, dingtalkCfg, logger);
-  const authToken =
-    dingtalkCfg.gatewayToken ??
-    dingtalkCfg.gatewayPassword ??
-    resolveGatewayAuthFromConfigFile(logger);
-
-  // 从 HTTP URL 推导 WebSocket URL
-  const wsUrl = dingtalkCfg.gatewayWsUrl ?? gatewayUrl.replace(/^http/, "ws").replace(/\/v1\/chat\/completions$/, "");
-  logger.debug(`[gateway-ws] streaming via ${wsUrl}, session=${sessionKey}`);
-
-  const client = getGatewayWsClient(
-    {
-      url: wsUrl,
-      token: authToken,
-      password: dingtalkCfg.gatewayPassword,
-    },
-    logger
-  );
-
-  // 确保已连接
-  await client.connect();
-
-  // 使用 WebSocket 流式获取响应
-  for await (const chunk of client.chatStream({
-    sessionKey,
-    message: userContent,
-    timeoutMs: 120000,
-  })) {
-    yield chunk;
-  }
-}
-
-/**
  * 解析钉钉原始消息为标准化的消息上下文
  * 
  * @param raw 钉钉原始消息对象
@@ -543,7 +497,7 @@ export function buildInboundContext(
  * 处理 AI Card 流式响应
  * 
  * 通过 Moltbot 核心 API 获取 LLM 响应，并流式更新 AI Card
- * 支持两种流式源：gateway-sse (HTTP SSE) 和 gateway-ws (WebSocket)
+ * 仅支持 gateway-sse (HTTP SSE) 流式输出
  * 
  * @param params 处理参数
  * @returns Promise<void>
@@ -584,28 +538,14 @@ async function handleAICardStreaming(params: {
     }
 
     // 根据配置选择流式源
-    const streamSource = dingtalkCfg.streamSource ?? "gateway-ws";
-    logger.debug(`[stream] using source: ${streamSource}`);
     const gatewayUserContent = buildGatewayUserContent(inboundCtx, logger);
-
-    const streamGenerator =
-      streamSource === "gateway-ws"
-        ? streamFromGatewayWs({
-            runtime: core,
-            sessionKey: route.sessionKey,
-            userContent: gatewayUserContent,
-            logger,
-            dingtalkCfg,
-          })
-        : streamFromGateway({
-            runtime: core,
-            sessionKey: route.sessionKey,
-            userContent: gatewayUserContent,
-            logger,
-            dingtalkCfg,
-          });
-
-    for await (const chunk of streamGenerator) {
+    for await (const chunk of streamFromGateway({
+      runtime: core,
+      sessionKey: route.sessionKey,
+      userContent: gatewayUserContent,
+      logger,
+      dingtalkCfg,
+    })) {
       accumulated += chunk;
       chunkCount += 1;
       if (!firstChunkAt) {
