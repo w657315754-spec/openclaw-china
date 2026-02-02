@@ -80,6 +80,40 @@ function truncateUtf8Bytes(text: string, maxBytes: number): string {
   return slice.toString("utf8");
 }
 
+/**
+ * 将长文本按字节长度分割成多个片段
+ * 企业微信限制：每条消息最长 2048 字节
+ * @param text 要分割的文本
+ * @param maxBytes 最大字节数（默认 2048）
+ * @returns 分割后的文本数组
+ */
+function splitMessageByBytes(text: string, maxBytes = 2048): string[] {
+  const result: string[] = [];
+  let current = "";
+  let currentBytes = 0;
+
+  for (const char of text) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    
+    // 如果当前字符加上后超过限制，先保存当前片段
+    if (currentBytes + charBytes > maxBytes && current.length > 0) {
+      result.push(current);
+      current = char;
+      currentBytes = charBytes;
+    } else {
+      current += char;
+      currentBytes += charBytes;
+    }
+  }
+
+  // 保存最后一个片段
+  if (current.length > 0) {
+    result.push(current);
+  }
+
+  return result;
+}
+
 function jsonOk(res: ServerResponse, body: unknown): void {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -561,26 +595,32 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
     const senderId = msg.from?.userid?.trim() ?? (msg as { FromUserName?: string }).FromUserName?.trim();
     const chatid = msg.chatid?.trim();
 
-    const hooks = {
-      onChunk: async (text: string) => {
-        const current = streams.get(streamId);
-        if (!current) return;
-        appendStreamContent(current, text);
-        target.statusSink?.({ lastOutboundAt: Date.now() });
+     const hooks = {
+       onChunk: async (text: string) => {
+         const current = streams.get(streamId);
+         if (!current) return;
+         appendStreamContent(current, text);
+         target.statusSink?.({ lastOutboundAt: Date.now() });
 
-        // 如果支持主动发送，使用主动发送 API
-        if (target.account.canSendActive && (senderId || chatid)) {
-          try {
-            await sendWecomAppMessage(
-              target.account,
-              chatid ? { chatid } : { userId: senderId },
-              stripMarkdown(text)
-            );
-          } catch (err) {
-            logger.error(`failed to send active message: ${String(err)}`);
-          }
-        }
-      },
+         // 如果支持主动发送，使用主动发送 API
+         if (target.account.canSendActive && (senderId || chatid)) {
+           try {
+             const formattedText = stripMarkdown(text);
+             const chunks = splitMessageByBytes(formattedText, 2048);
+             
+             // 逐段发送，避免超长被截断
+             for (const chunk of chunks) {
+               await sendWecomAppMessage(
+                 target.account,
+                 chatid ? { chatid } : { userId: senderId },
+                 chunk
+               );
+             }
+           } catch (err) {
+             logger.error(`failed to send active message: ${String(err)}`);
+           }
+         }
+       },
       onError: (err: unknown) => {
         const current = streams.get(streamId);
         if (current) {

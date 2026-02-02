@@ -34,12 +34,13 @@ export function stripMarkdown(text: string): string {
   // 2. 标题：用【】标记
   result = result.replace(/^#{1,6}\s+(.+)$/gm, "【$1】");
 
-  // 3. 粗体/斜体：保留文字
+  // 3. 粗体/斜体：保留文字（排除 URL 中的下划线）
   result = result
     .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/\*(.*?)\*/g, "$1")
     .replace(/__(.*?)__/g, "$1")
-    .replace(/_(.*?)_/g, "$1");
+    // 只替换独立的斜体标记（前后有空格或标点），避免匹配 URL 中的下划线
+    .replace(/(?<![\w/])_(.+?)_(?![\w/])/g, "$1");
 
   // 4. 列表项转为点号
   result = result.replace(/^[-*]\s+/gm, "· ");
@@ -284,4 +285,164 @@ export async function sendWecomAppMarkdownMessage(
     invalidtag: data.invalidtag,
     msgid: data.msgid,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 图片消息支持
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 下载图片
+ * @param imageUrl 图片 URL
+ * @returns 图片 Buffer
+ */
+export async function downloadImage(imageUrl: string): Promise<Buffer> {
+  const resp = await fetch(imageUrl);
+  if (!resp.ok) {
+    throw new Error(`Download image failed: HTTP ${resp.status}`);
+  }
+  const arrayBuffer = await resp.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+/**
+ * 上传图片素材获取 media_id
+ * @param account 账户配置
+ * @param imageBuffer 图片数据
+ * @param filename 文件名
+ * @returns media_id
+ */
+export async function uploadImageMedia(
+  account: ResolvedWecomAppAccount,
+  imageBuffer: Buffer,
+  filename = "image.jpg"
+): Promise<string> {
+  if (!account.canSendActive) {
+    throw new Error("Account not configured for active sending");
+  }
+
+  const token = await getAccessToken(account);
+  const boundary = `----FormBoundary${Date.now()}`;
+
+  // 构造 multipart/form-data
+  const header = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="media"; filename="${filename}"\r\n` +
+    `Content-Type: image/jpeg\r\n\r\n`
+  );
+  const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const body = Buffer.concat([header, imageBuffer, footer]);
+
+  const resp = await fetch(
+    `https://qyapi.weixin.qq.com/cgi-bin/media/upload?access_token=${encodeURIComponent(token)}&type=image`,
+    {
+      method: "POST",
+      body: body,
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+    }
+  );
+
+  const data = (await resp.json()) as { errcode?: number; errmsg?: string; media_id?: string };
+
+  if (data.errcode !== 0) {
+    throw new Error(`Upload image failed: ${data.errmsg ?? "unknown error"} (errcode=${data.errcode})`);
+  }
+
+  if (!data.media_id) {
+    throw new Error("Upload image returned empty media_id");
+  }
+
+  return data.media_id;
+}
+
+/**
+ * 发送图片消息
+ * @param account 账户配置
+ * @param target 发送目标
+ * @param mediaId 图片 media_id
+ */
+export async function sendWecomAppImageMessage(
+  account: ResolvedWecomAppAccount,
+  target: WecomAppSendTarget,
+  mediaId: string
+): Promise<SendMessageResult> {
+  if (!account.canSendActive) {
+    return {
+      ok: false,
+      errcode: -1,
+      errmsg: "Account not configured for active sending (missing corpId, corpSecret, or agentId)",
+    };
+  }
+
+  const token = await getAccessToken(account);
+
+  const payload: Record<string, unknown> = {
+    msgtype: "image",
+    agentid: account.agentId,
+    image: { media_id: mediaId },
+  };
+
+  if (target.chatid) {
+    payload.chatid = target.chatid;
+  } else if (target.userId) {
+    payload.touser = target.userId;
+  } else {
+    return {
+      ok: false,
+      errcode: -1,
+      errmsg: "No target specified (need userId or chatid)",
+    };
+  }
+
+  const resp = await fetch(
+    `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+
+  const data = (await resp.json()) as SendMessageResult & { errcode?: number };
+
+  return {
+    ok: data.errcode === 0,
+    errcode: data.errcode,
+    errmsg: data.errmsg,
+    invaliduser: data.invaliduser,
+    invalidparty: data.invalidparty,
+    invalidtag: data.invalidtag,
+    msgid: data.msgid,
+  };
+}
+
+/**
+ * 下载并发送图片（完整流程）
+ * @param account 账户配置
+ * @param target 发送目标
+ * @param imageUrl 图片 URL
+ */
+export async function downloadAndSendImage(
+  account: ResolvedWecomAppAccount,
+  target: WecomAppSendTarget,
+  imageUrl: string
+): Promise<SendMessageResult> {
+  try {
+    // 1. 下载图片
+    const imageBuffer = await downloadImage(imageUrl);
+
+    // 2. 上传获取 media_id
+    const mediaId = await uploadImageMedia(account, imageBuffer, "image.jpg");
+
+    // 3. 发送图片消息
+    return await sendWecomAppImageMessage(account, target, mediaId);
+  } catch (err) {
+    return {
+      ok: false,
+      errcode: -1,
+      errmsg: err instanceof Error ? err.message : String(err),
+    };
+  }
 }

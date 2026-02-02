@@ -21,7 +21,7 @@ import {
   resolveRequireMention,
   type PluginConfig,
 } from "./config.js";
-import { sendWecomAppMessage } from "./api.js";
+import { sendWecomAppMessage, downloadAndSendImage } from "./api.js";
 
 export type WecomAppDispatchHooks = {
   onChunk: (text: string) => void;
@@ -297,6 +297,38 @@ export async function sendActiveMessage(params: {
 
   try {
     const result = await sendWecomAppMessage(account, { userId, chatid }, message);
+    return {
+      ok: result.ok,
+      error: result.ok ? undefined : result.errmsg,
+      msgid: result.msgid,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * 主动发送图片消息 (仅限自建应用)
+ * 完整流程：下载图片 → 上传素材 → 发送图片
+ */
+export async function sendActiveImageMessage(params: {
+  account: ResolvedWecomAppAccount;
+  userId?: string;
+  chatid?: string;
+  imageUrl: string;
+  log?: (msg: string) => void;
+}): Promise<{ ok: boolean; error?: string; msgid?: string }> {
+  const { account, userId, chatid, imageUrl } = params;
+
+  if (!account.canSendActive) {
+    return { ok: false, error: "Account not configured for active sending" };
+  }
+
+  try {
+    const result = await downloadAndSendImage(account, { userId, chatid }, imageUrl);
     return {
       ok: result.ok,
       error: result.ok ? undefined : result.errmsg,
