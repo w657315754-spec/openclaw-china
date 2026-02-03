@@ -4,12 +4,132 @@
  * 提供 Access Token 缓存和主动发送消息能力
  */
 import type { ResolvedWecomAppAccount, WecomAppSendTarget, AccessTokenCacheEntry } from "./types.js";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
+import {
+  resolveInboundMediaDir,
+  resolveInboundMediaKeepDays,
+} from "./config.js";
+import { mkdir, writeFile, unlink, rename, readdir, stat } from "node:fs/promises";
 import { basename, join, extname } from "node:path";
 import { tmpdir } from "node:os";
 
 /** 下载超时时间（毫秒） */
 const DOWNLOAD_TIMEOUT = 120_000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 入站媒体：产品级存储策略
+// - 第一步：下载到 tmpdir()/wecom-app-media（快速、安全）
+// - 第二步：处理结束后“归档”到 inbound/YYYY-MM-DD，并延迟清理（keepDays）
+// - 关键：不再在 reply 后立刻删除，避免 OCR/MCP/回发等二次处理失败
+// ─────────────────────────────────────────────────────────────────────────────
+
+function formatDateDir(d = new Date()): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isProbablyInWecomTmpDir(p: string): boolean {
+  try {
+    const base = join(tmpdir(), "wecom-app-media");
+    // Windows 路径大小写与分隔符差异：做一次归一化比较
+    const norm = (s: string) => s.replace(/\\/g, "/").toLowerCase();
+    return norm(p).includes(norm(base));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 将临时媒体文件归档到 inbound/YYYY-MM-DD（尽力而为）
+ * - 仅对 tmpdir()/wecom-app-media 下的文件执行移动
+ * - 移动成功后，返回新路径；失败则返回原路径
+ */
+export async function finalizeInboundMedia(account: ResolvedWecomAppAccount, filePath: string): Promise<string> {
+  const p = String(filePath ?? "").trim();
+  if (!p) return p;
+
+  // 非临时目录文件，不动（比如用户指定了自定义 dir 或已经是 inbound）
+  if (!isProbablyInWecomTmpDir(p)) return p;
+
+  const baseDir = resolveInboundMediaDir(account.config ?? {});
+  const datedDir = join(baseDir, formatDateDir());
+  await mkdir(datedDir, { recursive: true });
+
+  const name = basename(p);
+  const dest = join(datedDir, name);
+
+  try {
+    await rename(p, dest);
+    return dest;
+  } catch {
+    // 移动失败就退化为“尽力删除”（避免 tmp 爆炸），但不抛出
+    try {
+      await unlink(p);
+    } catch {
+      // ignore
+    }
+    return p;
+  }
+}
+
+/**
+ * 清理 inbound 目录中过期文件（keepDays）
+ * - keepDays=0 表示不保留：仅清理“今天以前”的（仍给当日留缓冲）
+ * - 默认 keepDays 来自 config（默认 7 天）
+ */
+export async function pruneInboundMediaDir(account: ResolvedWecomAppAccount): Promise<void> {
+  const baseDir = resolveInboundMediaDir(account.config ?? {});
+  const keepDays = resolveInboundMediaKeepDays(account.config ?? {});
+  if (keepDays < 0) return;
+
+  const now = Date.now();
+  const cutoff = now - keepDays * 24 * 60 * 60 * 1000;
+
+  let entries: string[];
+  try {
+    entries = await readdir(baseDir);
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    // 只处理 YYYY-MM-DD 目录
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entry)) continue;
+    const dirPath = join(baseDir, entry);
+
+    let st;
+    try {
+      st = await stat(dirPath);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory()) continue;
+
+    const dirTime = st.mtimeMs || st.ctimeMs || 0;
+    if (dirTime >= cutoff) continue;
+
+    // 删除目录内文件（不递归子目录：保持安全可控）
+    let files: string[] = [];
+    try {
+      files = await readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    for (const f of files) {
+      const fp = join(dirPath, f);
+      try {
+        const fst = await stat(fp);
+        if (fst.isFile() && (fst.mtimeMs || fst.ctimeMs || 0) < cutoff) {
+          await unlink(fp);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
 
 /**
  * 文件大小超过限制时抛出的错误

@@ -2,6 +2,8 @@
  * 企业微信自建应用配置 schema
  */
 import { z } from "zod";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type {
   ResolvedWecomAppAccount,
@@ -259,7 +261,10 @@ export function resolveGroupAllowFrom(config: WecomAppAccountConfig): string[] {
 // 入站媒体设置
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_INBOUND_MEDIA_DIR = "/root/.openclaw/media/wecom-app/inbound";
+// Cross-platform default: ~/.openclaw/media/wecom-app/inbound
+// - Linux/macOS: /home/<user>/.openclaw/...
+// - Windows: C:\Users\<user>\.openclaw\...
+const DEFAULT_INBOUND_MEDIA_DIR = join(homedir(), ".openclaw", "media", "wecom-app", "inbound");
 const DEFAULT_INBOUND_MEDIA_MAX_BYTES = 10 * 1024 * 1024; // 10MB
 const DEFAULT_INBOUND_MEDIA_KEEP_DAYS = 7;
 
