@@ -279,6 +279,9 @@ function parseWecomAppPlainMessage(raw: string): WecomAppInboundMessage {
       PicUrl: xmlData.PicUrl,
       MediaId: xmlData.MediaId,
       image: xmlData.PicUrl ? { url: xmlData.PicUrl } : undefined,
+      // voice fields
+      Recognition: xmlData.Recognition,
+      Format: xmlData.Format,
       // 事件类型
       Event: xmlData.Event,
     } as WecomAppInboundMessage;

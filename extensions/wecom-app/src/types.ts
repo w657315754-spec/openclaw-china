@@ -140,6 +140,10 @@ export type WecomAppInboundVoice = WecomAppInboundBase & {
   MsgType?: "voice";
   voice?: { content?: string };
   Recognition?: string;
+  /** 语音 MediaId (用于下载原始语音文件) */
+  MediaId?: string;
+  /** 语音格式 (amr/speex) */
+  Format?: string;
   quote?: unknown;
 };
 

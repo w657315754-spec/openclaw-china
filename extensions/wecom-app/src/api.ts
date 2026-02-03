@@ -663,3 +663,222 @@ export async function downloadAndSendImage(
     };
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 语音消息支持
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 语音 MIME 类型映射表
+ */
+const VOICE_MIME_TYPE_MAP: Record<string, string> = {
+  '.amr': 'audio/amr',
+  '.speex': 'audio/speex',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+} as const;
+
+/**
+ * 根据文件扩展名获取语音 MIME 类型
+ */
+function getVoiceMimeType(filename: string, contentType?: string): string {
+  // 优先使用响应头的 Content-Type
+  if (contentType) {
+    return contentType.split(';')[0].trim();
+  }
+
+  // 回退到文件扩展名推断
+  const ext = filename.toLowerCase().match(/\.[^.]+$/)?.[0];
+  return VOICE_MIME_TYPE_MAP[ext || ''] || 'audio/amr';
+}
+
+/**
+ * 上传语音素材获取 media_id
+ * @param account 账户配置
+ * @param voiceBuffer 语音数据
+ * @param filename 文件名
+ * @param contentType MIME 类型（可选）
+ * @returns media_id
+ */
+export async function uploadVoiceMedia(
+  account: ResolvedWecomAppAccount,
+  voiceBuffer: Buffer,
+  filename = "voice.amr",
+  contentType?: string
+): Promise<string> {
+  if (!account.canSendActive) {
+    throw new Error("Account not configured for active sending");
+  }
+
+  const token = await getAccessToken(account);
+  const mimeType = getVoiceMimeType(filename, contentType);
+  const boundary = `----FormBoundary${Date.now()}`;
+
+  // 构造 multipart/form-data
+  const header = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="media"; filename="${filename}"\r\n` +
+    `Content-Type: ${mimeType}\r\n\r\n`
+  );
+  const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const body = Buffer.concat([header, voiceBuffer, footer]);
+
+  const resp = await fetch(
+    `https://qyapi.weixin.qq.com/cgi-bin/media/upload?access_token=${encodeURIComponent(token)}&type=voice`,
+    {
+      method: "POST",
+      body: body,
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+    }
+  );
+
+  const data = (await resp.json()) as { errcode?: number; errmsg?: string; media_id?: string };
+
+  if (data.errcode !== undefined && data.errcode !== 0) {
+    throw new Error(`Upload voice failed: ${data.errmsg ?? "unknown error"} (errcode=${data.errcode})`);
+  }
+
+  if (!data.media_id) {
+    throw new Error("Upload voice returned empty media_id");
+  }
+
+  return data.media_id;
+}
+
+/**
+ * 发送语音消息
+ * @param account 账户配置
+ * @param target 发送目标
+ * @param mediaId 语音 media_id
+ */
+export async function sendWecomAppVoiceMessage(
+  account: ResolvedWecomAppAccount,
+  target: WecomAppSendTarget,
+  mediaId: string
+): Promise<SendMessageResult> {
+  if (!account.canSendActive) {
+    return {
+      ok: false,
+      errcode: -1,
+      errmsg: "Account not configured for active sending (missing corpId, corpSecret, or agentId)",
+    };
+  }
+
+  const token = await getAccessToken(account);
+
+  const payload: Record<string, unknown> = {
+    msgtype: "voice",
+    agentid: account.agentId,
+    voice: { media_id: mediaId },
+  };
+
+  if (target.chatid) {
+    payload.chatid = target.chatid;
+  } else if (target.userId) {
+    payload.touser = target.userId;
+  } else {
+    return {
+      ok: false,
+      errcode: -1,
+      errmsg: "No target specified (need userId or chatid)",
+    };
+  }
+
+  const resp = await fetch(
+    `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+
+  const data = (await resp.json()) as SendMessageResult & { errcode?: number };
+
+  return {
+    ok: data.errcode === 0,
+    errcode: data.errcode,
+    errmsg: data.errmsg,
+    invaliduser: data.invaliduser,
+    invalidparty: data.invalidparty,
+    invalidtag: data.invalidtag,
+    msgid: data.msgid,
+  };
+}
+
+/**
+ * 下载语音文件（支持网络 URL 和本地文件路径）
+ * @param voiceUrl 语音 URL 或本地文件路径
+ * @returns 语音 Buffer
+ */
+export async function downloadVoice(voiceUrl: string): Promise<{ buffer: Buffer; contentType?: string }> {
+  // 判断是网络 URL 还是本地路径
+  if (voiceUrl.startsWith('http://') || voiceUrl.startsWith('https://')) {
+    // 网络下载
+    console.log(`[wecom-app] Using HTTP fetch to download voice: ${voiceUrl}`);
+    const resp = await fetch(voiceUrl);
+    if (!resp.ok) {
+      throw new Error(`Download voice failed: HTTP ${resp.status}`);
+    }
+    const arrayBuffer = await resp.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      contentType: resp.headers.get('content-type') || undefined,
+    };
+  } else {
+    // 本地文件读取
+    console.log(`[wecom-app] Using fs to read local voice file: ${voiceUrl}`);
+    const fs = await import('fs');
+    const buffer = await fs.promises.readFile(voiceUrl);
+    return {
+      buffer,
+      contentType: undefined, // 本地文件不提供 Content-Type，依赖扩展名推断
+    };
+  }
+}
+
+/**
+ * 下载并发送语音（完整流程）
+ * @param account 账户配置
+ * @param target 发送目标
+ * @param voiceUrl 语音 URL 或本地文件路径
+ */
+export async function downloadAndSendVoice(
+  account: ResolvedWecomAppAccount,
+  target: WecomAppSendTarget,
+  voiceUrl: string
+): Promise<SendMessageResult> {
+  try {
+    console.log(`[wecom-app] Downloading voice from: ${voiceUrl}`);
+
+    // 1. 下载语音
+    const { buffer: voiceBuffer, contentType } = await downloadVoice(voiceUrl);
+    console.log(`[wecom-app] Voice downloaded, size: ${voiceBuffer.length} bytes, contentType: ${contentType || 'unknown'}`);
+
+    // 2. 提取文件扩展名
+    const extMatch = voiceUrl.match(/\.([^.]+)$/);
+    const ext = extMatch ? `.${extMatch[1]}` : '.amr';
+    const filename = `voice${ext}`;
+
+    // 3. 上传获取 media_id
+    console.log(`[wecom-app] Uploading voice to WeCom media API, filename: ${filename}`);
+    const mediaId = await uploadVoiceMedia(account, voiceBuffer, filename, contentType);
+    console.log(`[wecom-app] Voice uploaded, media_id: ${mediaId}`);
+
+    // 4. 发送语音消息
+    console.log(`[wecom-app] Sending voice to target:`, target);
+    const result = await sendWecomAppVoiceMessage(account, target, mediaId);
+    console.log(`[wecom-app] Voice sent, ok: ${result.ok}, msgid: ${result.msgid}, errcode: ${result.errcode}, errmsg: ${result.errmsg}`);
+
+    return result;
+  } catch (err) {
+    console.error(`[wecom-app] downloadAndSendVoice error:`, err);
+    return {
+      ok: false,
+      errcode: -1,
+      errmsg: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

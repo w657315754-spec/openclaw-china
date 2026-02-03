@@ -181,6 +181,36 @@ export async function enrichInboundContentWithMedia(params: {
     return { text: extractWecomAppContent(msg), mediaPaths };
   }
 
+  // voice: download voice file to local, include recognition text if available
+  if (msgtype === "voice") {
+    const mediaId = String((msg as { MediaId?: string }).MediaId ?? "").trim();
+    const recognition = String((msg as { Recognition?: string }).Recognition ?? "").trim();
+    const format = String((msg as { Format?: string }).Format ?? "amr").trim();
+
+    if (mediaId) {
+      const saved = await downloadWecomMediaToFile(account, mediaId, { dir, maxBytes, prefix: "voice" });
+      if (saved.ok && saved.path) {
+        mediaPaths.push(saved.path);
+        // Include recognition text if available for agent to see transcription
+        if (recognition) {
+          return { text: `[voice] saved:${saved.path}\n[recognition] ${recognition}`, mediaPaths };
+        }
+        return { text: `[voice] saved:${saved.path}`, mediaPaths };
+      }
+      // fallback: include recognition if save failed
+      if (recognition) {
+        return { text: `[voice] (save failed) ${saved.error ?? ""}\n[recognition] ${recognition}`.trim(), mediaPaths };
+      }
+      return { text: `[voice] (save failed) ${saved.error ?? ""}`.trim(), mediaPaths };
+    }
+
+    // no mediaId, return recognition if available
+    if (recognition) {
+      return { text: `[voice]\n[recognition] ${recognition}`, mediaPaths };
+    }
+    return { text: extractWecomAppContent(msg), mediaPaths };
+  }
+
   // mixed: try to persist image items when present
   if (msgtype === "mixed") {
     const items = (msg as { mixed?: { msg_item?: unknown } }).mixed?.msg_item;
