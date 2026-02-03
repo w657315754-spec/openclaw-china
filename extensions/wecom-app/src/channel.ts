@@ -18,7 +18,7 @@ import {
 } from "./config.js";
 import { registerWecomAppWebhookTarget } from "./monitor.js";
 import { setWecomAppRuntime } from "./runtime.js";
-import { sendWecomAppMessage, stripMarkdown } from "./api.js";
+import { sendWecomAppMessage, stripMarkdown, downloadAndSendImage } from "./api.js";
 
 const meta = {
   id: "wecom-app",
@@ -162,6 +162,67 @@ export const wecomAppPlugin = {
   },
 
   /**
+   * 目录解析 - 用于将 wecom-app:XXX 格式的 target 解析为可投递目标
+   */
+  directory: {
+    /**
+     * 解析目标地址
+     * 将 wecom-app:XXX 格式的 target 解析为可用的投递对象
+     */
+    resolveTarget: (params: {
+      cfg: PluginConfig;
+      target: string;  // e.g., "wecom-app:CaiHongYu" or "wecom-app:group:chat123"
+    }): {
+      channel: string;
+      accountId?: string;
+      to: string;
+    } | null => {
+      const prefix = "wecom-app:";
+      
+      // 只处理 wecom-app: 开头的 target
+      if (!params.target.startsWith(prefix)) {
+        return null;
+      }
+      
+      const withoutPrefix = params.target.slice(prefix.length);
+      
+      // 解析 accountId（如果包含 @ 符号）
+      let accountId: string | undefined;
+      let to = withoutPrefix;
+      
+      if (withoutPrefix.includes("@")) {
+        const parts = withoutPrefix.split("@");
+        to = parts[0]!;
+        accountId = parts[1];
+      }
+      
+      // 标准化目标格式
+      if (to.startsWith("group:")) {
+        // 群聊: group:xxx
+        return {
+          channel: "wecom-app",
+          accountId,
+          to,
+        };
+      } else if (to.startsWith("user:")) {
+        // 显式用户: user:xxx
+        return {
+          channel: "wecom-app",
+          accountId,
+          to,
+        };
+      } else {
+        // 默认为用户ID，添加 user: 前缀
+        return {
+          channel: "wecom-app",
+          accountId,
+          to: `user:${to}`,
+        };
+      }
+    },
+  },
+
+  /**
    * 主动发送消息 (自建应用特有功能)
    */
   outbound: {
@@ -214,6 +275,77 @@ export const wecomAppPlugin = {
 
       try {
         const result = await sendWecomAppMessage(account, target, params.text);
+        return {
+          channel: "wecom-app",
+          ok: result.ok,
+          messageId: result.msgid ?? "",
+          error: result.ok ? undefined : new Error(result.errmsg ?? "send failed"),
+        };
+      } catch (err) {
+        return {
+          channel: "wecom-app",
+          ok: false,
+          messageId: "",
+          error: err instanceof Error ? err : new Error(String(err)),
+        };
+      }
+    },
+
+    /**
+     * 主动发送图片消息
+     * 
+     * 流程: 下载图片 → 上传素材 → 发送图片
+     * 参考: test-server.mjs 的实现
+     */
+    sendImage: async (params: {
+      cfg: PluginConfig;
+      accountId?: string;
+      to: string;
+      imageUrl: string;
+    }): Promise<{
+      channel: string;
+      ok: boolean;
+      messageId: string;
+      error?: Error;
+    }> => {
+      const account = resolveWecomAppAccount({ 
+        cfg: params.cfg, 
+        accountId: params.accountId 
+      });
+
+      if (!account.canSendActive) {
+        return {
+          channel: "wecom-app",
+          ok: false,
+          messageId: "",
+          error: new Error("Account not configured for active sending (missing corpId, corpSecret, or agentId)"),
+        };
+      }
+
+      // 解析 to: 支持格式 "wecom-app:user:xxx" / "wecom-app:group:xxx" / "wecom-app:xxx" / "user:xxx" / "group:xxx" / "xxx"
+      let to = params.to;
+
+      // 1. 先剥离 channel 前缀 "wecom-app:"
+      const channelPrefix = "wecom-app:";
+      if (to.startsWith(channelPrefix)) {
+        to = to.slice(channelPrefix.length);
+      }
+
+      // 2. 解析剩余部分: "group:xxx" / "user:xxx" / "xxx"
+      let target: { userId?: string; chatid?: string } = {};
+      if (to.startsWith("group:")) {
+        target = { chatid: to.slice(6) };
+      } else if (to.startsWith("user:")) {
+        target = { userId: to.slice(5) };
+      } else {
+        target = { userId: to };
+      }
+
+      try {
+        // 使用 api.ts 中的 downloadAndSendImage 函数
+        // 流程: 下载图片 → 上传素材 → 发送图片
+        const result = await downloadAndSendImage(account, target, params.imageUrl);
+        
         return {
           channel: "wecom-app",
           ok: result.ok,
