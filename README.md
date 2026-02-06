@@ -235,14 +235,14 @@ openclaw config set channels.wecom-app.agentId 1000002
 ```bash
 # 在你的项目目录（workspace）下
 mkdir -p ./skills
-cp -a /path/to/openclaw-china/skills/wecom-app-ops ./skills/
+cp -a ~/.openclaw/extensions/openclaw-china/extensions/wecom-app/skills/wecom-app-ops ./skills/
 ```
 
 或安装方式（全局）：
 
 ```bash
 mkdir -p ~/.openclaw/skills
-cp -a /path/to/openclaw-china/skills/wecom-app-ops ~/.openclaw/skills/
+cp -a ~/.openclaw/extensions/openclaw-china/extensions/wecom-app/skills/wecom-app-ops ~/.openclaw/skills/
 ```
 
 > 说明：Workspace > 全局（`~/.openclaw/skills`）> 内置 skills。复制后无需重启网关。
