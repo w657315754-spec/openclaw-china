@@ -1,5 +1,7 @@
 // 钉钉配置 schema
 import { z } from "zod";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * 钉钉渠道配置 Schema
@@ -17,7 +19,7 @@ import { z } from "zod";
  * - textChunkLimit: 文本分块大小限制
  * - enableAICard: 是否启用 AI Card 流式响应
  * - maxFileSizeMB: 媒体文件大小限制 (MB)
- * - replyFinalOnly: 是否只发送最终回复（非流式）
+ * - inboundMedia: 入站媒体归档与保留策略
  */
 export const DingtalkConfigSchema = z.object({
   /** 是否启用钉钉渠道 */
@@ -62,12 +64,36 @@ export const DingtalkConfigSchema = z.object({
   /** 媒体文件大小限制 (MB)，默认 100MB */
   maxFileSizeMB: z.number().positive().optional().default(100),
 
-  /** 仅发送最终回复（非流式） */
-  replyFinalOnly: z.boolean().optional().default(false),
+  /** 入站媒体归档策略 */
+  inboundMedia: z
+    .object({
+      dir: z.string().optional(),
+      keepDays: z.number().optional(),
+    })
+    .optional(),
   
 });
 
 export type DingtalkConfig = z.infer<typeof DingtalkConfigSchema>;
+
+const DEFAULT_INBOUND_MEDIA_DIR = join(homedir(), ".openclaw", "media", "dingtalk", "inbound");
+const DEFAULT_INBOUND_MEDIA_KEEP_DAYS = 7;
+const DEFAULT_INBOUND_MEDIA_TEMP_DIR = join(tmpdir(), "dingtalk-media");
+
+export function resolveInboundMediaDir(config: DingtalkConfig | undefined): string {
+  return String(config?.inboundMedia?.dir ?? "").trim() || DEFAULT_INBOUND_MEDIA_DIR;
+}
+
+export function resolveInboundMediaKeepDays(config: DingtalkConfig | undefined): number {
+  const value = config?.inboundMedia?.keepDays;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : DEFAULT_INBOUND_MEDIA_KEEP_DAYS;
+}
+
+export function resolveInboundMediaTempDir(): string {
+  return DEFAULT_INBOUND_MEDIA_TEMP_DIR;
+}
 
 /**
  * 检查钉钉配置是否已配置凭证

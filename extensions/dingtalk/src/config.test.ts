@@ -7,7 +7,13 @@
 
 import { describe, it, expect } from "vitest";
 import * as fc from "fast-check";
-import { DingtalkConfigSchema, isConfigured, resolveDingtalkCredentials } from "./config.js";
+import {
+  DingtalkConfigSchema,
+  isConfigured,
+  resolveDingtalkCredentials,
+  resolveInboundMediaDir,
+  resolveInboundMediaKeepDays,
+} from "./config.js";
 
 describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () => {
   /**
@@ -199,5 +205,22 @@ describe("Feature: dingtalk-integration, Property 1: 配置 Schema 验证", () =
       }),
       { numRuns: 50 }
     );
+  });
+});
+
+describe("inboundMedia retention config", () => {
+  it("uses default keepDays=7", () => {
+    expect(resolveInboundMediaKeepDays(undefined)).toBe(7);
+  });
+
+  it("resolves keepDays and dir from config", () => {
+    const cfg = DingtalkConfigSchema.parse({
+      inboundMedia: {
+        dir: "/tmp/custom-inbound",
+        keepDays: 3,
+      },
+    });
+    expect(resolveInboundMediaKeepDays(cfg)).toBe(3);
+    expect(resolveInboundMediaDir(cfg)).toBe("/tmp/custom-inbound");
   });
 });

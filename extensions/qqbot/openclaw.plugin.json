@@ -1,17 +1,17 @@
 {
-  "id": "dingtalk",
-  "name": "DingTalk",
-  "description": "钉钉消息渠道插件",
+  "id": "qqbot",
+  "name": "QQ Bot",
+  "description": "QQ 开放平台机器人消息渠道插件",
   "version": "0.1.0",
-  "channels": ["dingtalk"],
+  "channels": ["qqbot"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "enabled": { "type": "boolean" },
-      "clientId": { "type": "string" },
+      "appId": { "type": "string" },
       "clientSecret": { "type": "string" },
-      "connectionMode": { "type": "string", "enum": ["stream", "webhook"] },
+      "markdownSupport": { "type": "boolean" },
       "dmPolicy": { "type": "string", "enum": ["open", "pairing", "allowlist"] },
       "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
       "requireMention": { "type": "boolean" },
@@ -19,16 +19,13 @@
       "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
       "historyLimit": { "type": "integer", "minimum": 0 },
       "textChunkLimit": { "type": "integer", "minimum": 1 },
-      "enableAICard": { "type": "boolean" },
-      "gatewayToken": { "type": "string" },
-      "gatewayPassword": { "type": "string" },
-      "maxFileSizeMB": { "type": "number", "minimum": 1 }
+      "replyFinalOnly": { "type": "boolean" },
+      "maxFileSizeMB": { "type": "number", "exclusiveMinimum": 0 },
+      "mediaTimeoutMs": { "type": "integer", "minimum": 1 }
     }
   },
   "uiHints": {
-    "clientId": { "label": "Client ID (AppKey)" },
-    "clientSecret": { "label": "Client Secret (AppSecret)", "sensitive": true },
-    "gatewayToken": { "label": "Gateway Token", "sensitive": true },
-    "gatewayPassword": { "label": "Gateway Password", "sensitive": true }
+    "appId": { "label": "App ID" },
+    "clientSecret": { "label": "Client Secret", "sensitive": true }
   }
 }

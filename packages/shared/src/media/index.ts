@@ -39,6 +39,10 @@ export {
   // 类型
   type MediaReadResult,
   type MediaReadOptions,
+  type DownloadToTempFileResult,
+  type DownloadToTempFileOptions,
+  type FinalizeInboundMediaOptions,
+  type PruneInboundMediaDirOptions,
   type PathSecurityOptions,
   // 错误类
   FileSizeLimitError,
@@ -54,4 +58,8 @@ export {
   readMediaFromLocal,
   readMedia,
   readMediaBatch,
+  downloadToTempFile,
+  finalizeInboundMediaFile,
+  pruneInboundMediaDir,
+  cleanupFileSafe,
 } from "./media-io.js";

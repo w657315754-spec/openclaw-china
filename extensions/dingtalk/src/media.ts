@@ -15,12 +15,15 @@
  */
 
 import { getAccessToken } from "./client.js";
+import { resolveInboundMediaTempDir } from "./config.js";
 import {
-  resolveExtension,
   extractImagesFromText,
+  cleanupFileSafe,
+  downloadToTempFile,
+  FileSizeLimitError as SharedFileSizeLimitError,
+  MediaTimeoutError,
 } from "@openclaw-china/shared";
 import type { Logger } from "./logger.js";
-import * as os from "os";
 import * as path from "path";
 import * as fsPromises from "fs/promises";
 
@@ -1237,88 +1240,31 @@ export async function downloadDingTalkFile(
   }
 
   log?.debug?.(`Got download URL, starting download...`);
-
-  // Step 2: Download the file (with dedicated 120s timeout)
-  const downloadController = new AbortController();
-  const downloadTimeoutId = setTimeout(() => downloadController.abort(), DOWNLOAD_TIMEOUT);
-
   try {
-    const fileResponse = await fetch(downloadUrl, {
-      signal: downloadController.signal,
+    const downloaded = await downloadToTempFile(downloadUrl, {
+      timeout: DOWNLOAD_TIMEOUT,
+      maxSize: sizeLimit,
+      sourceFileName: fileName,
+      tempPrefix: "dingtalk-file",
+      tempDir: resolveInboundMediaTempDir(),
     });
 
-    if (!fileResponse.ok) {
-      throw new Error(
-        `File download failed: HTTP ${fileResponse.status}`
-      );
-    }
-
-    // Get content type and content length
-    const contentType = fileResponse.headers.get("content-type") || "application/octet-stream";
-    const contentLengthHeader = fileResponse.headers.get("content-length");
-    const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : null;
-
-    // Step 3: Check Content-Length against size limit
-    if (contentLength !== null && contentLength > sizeLimit) {
-      // Abort immediately without downloading body
-      downloadController.abort();
-      throw new FileSizeLimitError(contentLength, sizeLimit, msgType);
-    }
-
-    // Step 4: Stream response body while counting bytes
-    const body = fileResponse.body;
-    if (!body) {
-      throw new Error("Response body is null");
-    }
-
-    const chunks: Uint8Array[] = [];
-    let totalBytes = 0;
-    const reader = body.getReader();
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        totalBytes += value.length;
-
-        // Check size limit during streaming (when Content-Length was absent)
-        if (totalBytes > sizeLimit) {
-          reader.cancel();
-          throw new FileSizeLimitError(totalBytes, sizeLimit, msgType);
-        }
-
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    // Combine chunks into buffer
-    const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
-
-    // Step 5: Save to tmpdir with correct extension
-    const extension = resolveExtension(contentType, fileName);
-    const tempFileName = `dingtalk-file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${extension}`;
-    const tempFilePath = path.join(os.tmpdir(), tempFileName);
-
-    await fsPromises.writeFile(tempFilePath, buffer);
-
-    log?.debug?.(`File saved to: ${tempFilePath} (${totalBytes} bytes)`);
+    log?.debug?.(`File saved to: ${downloaded.path} (${downloaded.size} bytes)`);
 
     return {
-      path: tempFilePath,
-      contentType,
-      size: totalBytes,
+      path: downloaded.path,
+      contentType: downloaded.contentType,
+      size: downloaded.size,
       fileName,
     };
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new TimeoutError(DOWNLOAD_TIMEOUT);
+    if (err instanceof SharedFileSizeLimitError) {
+      throw new FileSizeLimitError(err.actualSize, err.limitSize, msgType);
+    }
+    if (err instanceof MediaTimeoutError) {
+      throw new TimeoutError(err.timeoutMs);
     }
     throw err;
-  } finally {
-    clearTimeout(downloadTimeoutId);
   }
 }
 
@@ -1417,20 +1363,8 @@ export async function downloadRichTextImages(
  * Requirements: 8.1, 8.3, 8.4
  */
 export async function cleanupFile(filePath?: string, log?: Logger): Promise<void> {
-  if (!filePath) {
-    return;
-  }
-
-  try {
-    await fsPromises.unlink(filePath);
-  } catch (err) {
-    // Silently ignore ENOENT (file not found) errors (Requirement 8.3)
-    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
-    }
-
-    // Log debug for other errors (Requirement 8.4)
+  await cleanupFileSafe(filePath, (err, targetPath) => {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    log?.debug?.(`Failed to cleanup file ${filePath}: ${errorMessage}`);
-  }
+    log?.debug?.(`Failed to cleanup file ${targetPath}: ${errorMessage}`);
+  });
 }

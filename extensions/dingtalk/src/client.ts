@@ -18,12 +18,29 @@ interface DingtalkClientOptions {
   clientSecret: string;
   /** Optional UA label for DingTalk gateway */
   ua?: string;
+  /** Enable SDK ping/pong keep-alive heartbeat */
+  keepAlive?: boolean;
+  /** Enable SDK debug logs */
+  debug?: boolean;
+  /** Whether SDK should auto reconnect internally */
+  autoReconnect?: boolean;
+  /** Reuse cached client when credentials/config are identical */
+  reuseCache?: boolean;
 }
 
 /** 缓存的客户端实例 */
 let cachedClient: DWClient | null = null;
 /** 缓存的配置（用于比较是否需要重建客户端） */
-let cachedConfig: { clientId: string; clientSecret: string } | null = null;
+let cachedConfig:
+  | {
+      clientId: string;
+      clientSecret: string;
+      ua?: string;
+      keepAlive?: boolean;
+      debug?: boolean;
+      autoReconnect?: boolean;
+    }
+  | null = null;
 
 /**
  * 创建钉钉 Stream 客户端
@@ -34,28 +51,53 @@ let cachedConfig: { clientId: string; clientSecret: string } | null = null;
  * @returns DWClient 实例
  */
 export function createDingtalkClient(opts: DingtalkClientOptions): DWClient {
+  const reuseCache = opts.reuseCache !== false;
+
   // 检查缓存是否可用
   if (
+    reuseCache &&
     cachedClient &&
     cachedConfig &&
     cachedConfig.clientId === opts.clientId &&
-    cachedConfig.clientSecret === opts.clientSecret
+    cachedConfig.clientSecret === opts.clientSecret &&
+    cachedConfig.ua === opts.ua &&
+    cachedConfig.keepAlive === opts.keepAlive &&
+    cachedConfig.debug === opts.debug &&
+    cachedConfig.autoReconnect === opts.autoReconnect
   ) {
     return cachedClient;
   }
 
-  // 创建新客户端
-  const client = new DWClient({
+  const constructorOpts: {
+    clientId: string;
+    clientSecret: string;
+    ua?: string;
+    keepAlive?: boolean;
+    debug?: boolean;
+  } & { autoReconnect?: boolean } = {
     clientId: opts.clientId,
     clientSecret: opts.clientSecret,
     ...(opts.ua ? { ua: opts.ua } : {}),
-  });
+    ...(typeof opts.keepAlive === "boolean" ? { keepAlive: opts.keepAlive } : {}),
+    ...(typeof opts.debug === "boolean" ? { debug: opts.debug } : {}),
+  };
+
+  if (typeof opts.autoReconnect === "boolean") {
+    constructorOpts.autoReconnect = opts.autoReconnect;
+  }
+
+  // 创建新客户端
+  const client = new DWClient(constructorOpts);
 
   // 更新缓存
   cachedClient = client;
   cachedConfig = {
     clientId: opts.clientId,
     clientSecret: opts.clientSecret,
+    ua: opts.ua,
+    keepAlive: opts.keepAlive,
+    debug: opts.debug,
+    autoReconnect: opts.autoReconnect,
   };
 
   return client;
@@ -68,7 +110,15 @@ export function createDingtalkClient(opts: DingtalkClientOptions): DWClient {
  * @returns DWClient 实例
  * @throws Error 如果凭证未配置
  */
-export function createDingtalkClientFromConfig(cfg: DingtalkConfig): DWClient {
+export function createDingtalkClientFromConfig(
+  cfg: DingtalkConfig,
+  opts?: {
+    keepAlive?: boolean;
+    debug?: boolean;
+    autoReconnect?: boolean;
+    reuseCache?: boolean;
+  }
+): DWClient {
   const creds = resolveDingtalkCredentials(cfg);
   if (!creds) {
     throw new Error("DingTalk credentials not configured (clientId, clientSecret required)");
@@ -76,6 +126,10 @@ export function createDingtalkClientFromConfig(cfg: DingtalkConfig): DWClient {
   return createDingtalkClient({
     ...creds,
     ua: "openclaw-dingtalk",
+    keepAlive: opts?.keepAlive,
+    debug: opts?.debug,
+    autoReconnect: opts?.autoReconnect,
+    reuseCache: opts?.reuseCache,
   });
 }
 

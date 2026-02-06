@@ -1,5 +1,14 @@
 # 钉钉渠道配置指南
 
+<div align="center">
+
+  <p>
+    <strong>⭐ 如果这个项目对你有帮助，请给我们一个Star！⭐</strong><br>
+    <em>您的支持是我们持续改进的动力</em>
+  </p>
+
+</div>
+
 ## 一、获取钉钉凭证
 
 ### 1. 创建企业
@@ -94,7 +103,11 @@ openclaw config set channels.dingtalk '{
   "clientId": "dingxxxxxx",
   "clientSecret": "your-app-secret",
   "enableAICard": true,
-  "maxFileSizeMB": 100
+  "maxFileSizeMB": 100,
+  "inboundMedia": {
+    "dir": "~/.openclaw/media/dingtalk/inbound",
+    "keepDays": 7
+  }
 }' --json
 ```
 
@@ -109,6 +122,13 @@ openclaw config set channels.dingtalk '{
 | requireMention | boolean | true | 群聊是否需要 @机器人 |
 | enableAICard | boolean | true | 是否启用 AI Card 流式响应 |
 | maxFileSizeMB | number | 100 | 媒体文件大小限制 (MB) |
+| inboundMedia.dir | string | `~/.openclaw/media/dingtalk/inbound` | 入站媒体归档根目录 |
+| inboundMedia.keepDays | number | 7 | 入站媒体保留天数（按过期清理） |
+
+入站媒体保留策略（dingtalk）：
+- 先下载到临时目录，再归档到 `inboundMedia.dir/YYYY-MM-DD/`
+- 每次消息处理结束后，按 `keepDays` 清理过期文件（不递归删子目录，不强删目录）
+
 ### 2. OpenClaw初始化
 ```
 openclaw onboard --install-daemon
