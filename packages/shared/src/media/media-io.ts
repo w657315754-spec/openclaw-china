@@ -72,6 +72,30 @@ export interface DownloadToTempFileOptions extends MediaReadOptions {
 }
 
 /**
+ * 归档入站媒体参数
+ */
+export interface FinalizeInboundMediaOptions {
+  /** 当前文件路径 */
+  filePath: string;
+  /** 临时目录（仅该目录下文件会归档） */
+  tempDir: string;
+  /** 入站归档根目录 */
+  inboundDir: string;
+}
+
+/**
+ * 过期清理参数
+ */
+export interface PruneInboundMediaDirOptions {
+  /** 入站归档根目录 */
+  inboundDir: string;
+  /** 保留天数，>=0 生效 */
+  keepDays: number;
+  /** 当前时间（测试用） */
+  nowMs?: number;
+}
+
+/**
  * 路径安全检查选项
  */
 export interface PathSecurityOptions {
@@ -138,6 +162,23 @@ function resolveFileNameFromUrl(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function normalizeForCompare(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/").toLowerCase();
+}
+
+function isPathUnderDir(filePath: string, dirPath: string): boolean {
+  const f = normalizeForCompare(filePath);
+  const d = normalizeForCompare(dirPath).replace(/\/+$/, "");
+  return f === d || f.startsWith(`${d}/`);
+}
+
+function formatDateDir(date = new Date()): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 /** 扩展名到 MIME 类型映射 */
@@ -582,6 +623,90 @@ export async function readMediaBatch(
     }
     return { source: sources[index], error: result.reason as Error };
   });
+}
+
+/**
+ * 将临时媒体文件归档到 inbound/YYYY-MM-DD
+ * - 仅归档 tempDir 下的文件
+ * - 失败时返回原路径，不抛错
+ */
+export async function finalizeInboundMediaFile(
+  options: FinalizeInboundMediaOptions
+): Promise<string> {
+  const current = String(options.filePath ?? "").trim();
+  if (!current) return current;
+
+  if (!isPathUnderDir(current, options.tempDir)) {
+    return current;
+  }
+
+  const datedDir = path.join(options.inboundDir, formatDateDir());
+  const target = path.join(datedDir, path.basename(current));
+
+  try {
+    await fsPromises.mkdir(datedDir, { recursive: true });
+    await fsPromises.rename(current, target);
+    return target;
+  } catch {
+    return current;
+  }
+}
+
+/**
+ * 清理 inbound 目录中过期文件
+ * - 仅处理 YYYY-MM-DD 目录
+ * - 仅删除过期文件，不递归子目录，不删除目录
+ */
+export async function pruneInboundMediaDir(
+  options: PruneInboundMediaDirOptions
+): Promise<void> {
+  const keepDays = Number(options.keepDays);
+  if (!Number.isFinite(keepDays) || keepDays < 0) return;
+
+  const now = options.nowMs ?? Date.now();
+  const cutoff = now - keepDays * 24 * 60 * 60 * 1000;
+
+  let entries: string[] = [];
+  try {
+    entries = await fsPromises.readdir(options.inboundDir);
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entry)) continue;
+    const dirPath = path.join(options.inboundDir, entry);
+
+    let dirStats;
+    try {
+      dirStats = await fsPromises.stat(dirPath);
+    } catch {
+      continue;
+    }
+    if (!dirStats.isDirectory()) continue;
+
+    const dirTime = dirStats.mtimeMs || dirStats.ctimeMs || 0;
+    if (dirTime >= cutoff) continue;
+
+    let files: string[] = [];
+    try {
+      files = await fsPromises.readdir(dirPath);
+    } catch {
+      continue;
+    }
+
+    for (const file of files) {
+      const fp = path.join(dirPath, file);
+      try {
+        const fst = await fsPromises.stat(fp);
+        if (fst.isFile() && (fst.mtimeMs || fst.ctimeMs || 0) < cutoff) {
+          await fsPromises.unlink(fp);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 /**

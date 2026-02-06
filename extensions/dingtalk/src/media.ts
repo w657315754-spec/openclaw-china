@@ -15,6 +15,7 @@
  */
 
 import { getAccessToken } from "./client.js";
+import { resolveInboundMediaTempDir } from "./config.js";
 import {
   extractImagesFromText,
   cleanupFileSafe,
@@ -1245,6 +1246,7 @@ export async function downloadDingTalkFile(
       maxSize: sizeLimit,
       sourceFileName: fileName,
       tempPrefix: "dingtalk-file",
+      tempDir: resolveInboundMediaTempDir(),
     });
 
     log?.debug?.(`File saved to: ${downloaded.path} (${downloaded.size} bytes)`);

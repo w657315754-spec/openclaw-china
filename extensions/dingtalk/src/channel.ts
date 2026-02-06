@@ -126,6 +126,15 @@ export const dingtalkPlugin = {
         enableAICard: { type: "boolean" },
         gatewayToken: { type: "string" },
         gatewayPassword: { type: "string" },
+        maxFileSizeMB: { type: "number", minimum: 0 },
+        inboundMedia: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            dir: { type: "string" },
+            keepDays: { type: "number", minimum: 0 },
+          },
+        },
       },
     },
   },

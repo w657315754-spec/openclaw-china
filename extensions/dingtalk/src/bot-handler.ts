@@ -5,7 +5,12 @@
  */
 
 import type { DingtalkRawMessage, DingtalkMessageContext } from "./types.js";
-import type { DingtalkConfig } from "./config.js";
+import {
+  type DingtalkConfig,
+  resolveInboundMediaDir,
+  resolveInboundMediaKeepDays,
+  resolveInboundMediaTempDir,
+} from "./config.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getDingtalkRuntime, isDingtalkRuntimeInitialized } from "./runtime.js";
@@ -16,7 +21,6 @@ import {
   downloadDingTalkFile,
   parseRichTextMessage,
   downloadRichTextImages,
-  cleanupFile,
   type DownloadedFile,
   type ExtractedFileInfo,
   type MediaMsgType,
@@ -34,6 +38,8 @@ import {
   isImagePath,
   appendCronHiddenPrompt,
   splitCronHiddenPrompt,
+  finalizeInboundMediaFile,
+  pruneInboundMediaDir,
 } from "@openclaw-china/shared";
 
 function buildGatewayUserContent(inboundCtx: InboundContext, logger: Logger): string {
@@ -730,6 +736,19 @@ export async function handleDingtalkMessage(params: {
   // 获取钉钉配置
   const dingtalkCfg = (cfg as Record<string, unknown>)?.channels as Record<string, unknown> | undefined;
   const channelCfg = dingtalkCfg?.dingtalk as DingtalkConfig | undefined;
+  const inboundMediaDir = resolveInboundMediaDir(channelCfg);
+  const inboundMediaKeepDays = resolveInboundMediaKeepDays(channelCfg);
+  const inboundMediaTempDir = resolveInboundMediaTempDir();
+
+  const archiveInboundMedia = async (file: DownloadedFile): Promise<DownloadedFile> => {
+    const finalPath = await finalizeInboundMediaFile({
+      filePath: file.path,
+      tempDir: inboundMediaTempDir,
+      inboundDir: inboundMediaDir,
+    });
+    if (finalPath === file.path) return file;
+    return { ...file, path: finalPath };
+  };
   
   // 策略检�?
   if (isGroup) {
@@ -840,7 +859,8 @@ export async function handleDingtalkMessage(params: {
               log: logger,
               maxFileSizeMB: channelCfg.maxFileSizeMB,
             });
-            
+
+            downloadedMedia = await archiveInboundMedia(downloadedMedia);
             logger.debug(`downloaded media file: ${downloadedMedia.path} (${downloadedMedia.size} bytes)`);
             
             // 构建消息正文 (Requirement 9.5)
@@ -879,7 +899,10 @@ export async function handleDingtalkMessage(params: {
               log: logger,
               maxFileSizeMB: channelCfg.maxFileSizeMB,
             });
-            
+
+            downloadedRichTextImages = await Promise.all(
+              downloadedRichTextImages.map((file) => archiveInboundMedia(file))
+            );
             logger.debug(`downloaded ${downloadedRichTextImages.length}/${richTextParseResult.imageCodes.length} richText images`);
           }
 
@@ -1328,47 +1351,16 @@ export async function handleDingtalkMessage(params: {
     logger.debug(
       `dispatch complete (queuedFinal=${typeof queuedFinal === "boolean" ? queuedFinal : "unknown"}, replies=${counts?.final ?? 0})`
     );
-    
-    // ===== 文件清理 (Requirements 8.1, 8.2, 8.4) =====
-    // 清理单个媒体文件
-    if (downloadedMedia && extractedFileInfo) {
-      const category = resolveFileCategory(downloadedMedia.contentType, extractedFileInfo.fileName);
-      
-      // 图片/音频/视频立即删除 (Requirement 8.1)
-      // 文档/压缩�?代码文件保留�?agent 工具访问 (Requirement 8.2)
-      if (category === "image" || category === "audio" || category === "video") {
-        await cleanupFile(downloadedMedia.path, logger);
-        logger.debug(`cleaned up media file: ${downloadedMedia.path}`);
-      } else {
-        logger.debug(`retaining file for agent access: ${downloadedMedia.path} (category: ${category})`);
-      }
-    }
-    
-    // 清理 richText 图片 (Requirement 8.4)
-    for (const img of downloadedRichTextImages) {
-      await cleanupFile(img.path, logger);
-    }
-    if (downloadedRichTextImages.length > 0) {
-      logger.debug(`cleaned up ${downloadedRichTextImages.length} richText images`);
-    }
   } catch (err) {
     logger.error(`failed to dispatch message: ${String(err)}`);
-    
-    // 即使出错也要按分类策略清理文�?(Requirements 8.1, 8.2)
-    // 图片/音频/视频立即删除，文�?压缩�?代码文件保留�?agent 工具访问
-    if (downloadedMedia && extractedFileInfo) {
-      const category = resolveFileCategory(downloadedMedia.contentType, extractedFileInfo.fileName);
-      if (category === "image" || category === "audio" || category === "video") {
-        await cleanupFile(downloadedMedia.path, logger);
-        logger.debug(`cleaned up media file on error: ${downloadedMedia.path}`);
-      } else {
-        logger.debug(`retaining file for agent access on error: ${downloadedMedia.path} (category: ${category})`);
-      }
-    }
-    
-    // richText 图片始终清理
-    for (const img of downloadedRichTextImages) {
-      await cleanupFile(img.path, logger);
+  } finally {
+    try {
+      await pruneInboundMediaDir({
+        inboundDir: inboundMediaDir,
+        keepDays: inboundMediaKeepDays,
+      });
+    } catch (err) {
+      logger.debug(`failed to prune inbound media dir: ${String(err)}`);
     }
   }
 }

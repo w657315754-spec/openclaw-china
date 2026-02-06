@@ -6,13 +6,13 @@
 
 [快速开始](#快速开始) · [演示](#演示) · [配置选项](#配置选项) · [开发](#开发)
 
-| 平台 | 状态 |
-|------|:----:|
-| 钉钉 | ✅ 可用 |
-| 飞书 | ✅ 可用 |
-| 企业微信（智能机器人） | ✅ 可用 |
-| 企业微信（自建应用-可接入普通微信） | ✅ 可用 |
-| QQ 机器人 | ✅ 可用 |
+| 平台 | 状态 | 配置指南 |
+|------|:----:|----------|
+| 钉钉 | ✅ 可用 | [钉钉企业注册指南](doc/guides/dingtalk/configuration.md) |
+| 企业微信（自建应用-可接入普通微信） | ✅ 可用 | [企业微信自建应用配置指南](doc/guides/wecom-app/configuration.md) |
+| QQ 机器人 | ✅ 可用 | [QQ 渠道配置指南](doc/guides/qqbot/configuration.md) |
+| 飞书 | ✅ 可用 | - |
+| 企业微信（智能机器人） | ✅ 可用 | - |
 
 
 ## 功能支持
@@ -36,25 +36,12 @@
 | 连接方式 | Stream 长连接 | WebSocket 长连接 | - | HTTPS 回调 | HTTPS 回调 |
 | Access Token 缓存 | - | - | - | - | ✅（2 小时有效期） |
 
-> 💡 **钉钉 AI Card** 支持打字机效果的流式输出，体验最佳。启用方式：`enableAICard: true`
->
-> 💡 **飞书 Markdown 卡片** 启用方式：`sendMarkdownAsCard: true`
->
-> 💡 **企业微信智能机器人** 仅支持被动回复模式，不支持主动发送消息
->
-> 💡 **企业微信自建应用** 支持主动发送消息，需要配置 `corpId`、`corpSecret`、`agentId`
-
-## 2.4 更新
-
-1. 钉钉、飞书支持定时任务（主动发送消息）。
-2. 修复钉钉语音发送问题，当前可正常发送语音。
-3. 之前默认只发送最终回复文本，但部分任务等待较长；现开放参数 `replyFinalOnly`（默认 `false`）以控制是否仅发送最终结果。
 
 ## 快速开始
 
 ### 1) 安装
 
-> 飞书、企业微信保姆文档编写中，现在最容易配置的是钉钉，建议先尝试钉钉。
+> 其他保姆文档编写中，现在最容易配置的是钉钉，建议先尝试钉钉。
 
 #### 方式一：从 npm 安装
 
@@ -119,7 +106,8 @@ pnpm build
 
 ### 2) 配置渠道
 
-#### 钉钉
+<details>
+<summary><strong>钉钉</strong></summary>
 
 > 📖 **[钉钉企业注册指南](doc/guides/dingtalk/configuration.md)** — 无需材料，5 分钟内完成配置
 
@@ -139,7 +127,7 @@ openclaw config set gateway.http.endpoints.chatCompletions.enabled true
 {
   "channels": {
     "dingtalk": {
-      "dmPolicy": "open",          // open | allowlist
+      "dmPolicy": "open",          // open | pairing | allowlist
       "groupPolicy": "open",       // open | allowlist | disabled
       "requireMention": true,
       "allowFrom": [],
@@ -149,8 +137,10 @@ openclaw config set gateway.http.endpoints.chatCompletions.enabled true
 }
 ```
 
+</details>
 
-#### 企业微信（自建应用-可接入微信）
+<details>
+<summary><strong>企业微信（自建应用-可接入微信）</strong></summary>
 
 由[@RainbowRain9 Cai Hongyu](https://github.com/RainbowRain9)提供
 
@@ -189,10 +179,12 @@ openclaw config set channels.wecom-app.agentId 1000002
 
 > 更完整说明见：`doc/guides/wecom-app/configuration.md`
 
+</details>
 
-#### QQ
+<details>
+<summary><strong>QQ</strong></summary>
 
-> ?? **[QQ 渠道配置指南](https://github.com/BytePioneer-AI/openclaw-china/blob/main/doc/guides/qqbot/configuration.md)**
+> 📖 **[QQ 渠道配置指南](https://github.com/BytePioneer-AI/openclaw-china/blob/main/doc/guides/qqbot/configuration.md)**
 
 ```bash
 openclaw config set channels.qqbot.enabled true
@@ -201,7 +193,10 @@ openclaw config set channels.qqbot.clientSecret your-app-secret
 openclaw config set channels.qqbot.markdownSupport true
 ```
 
-#### 企业微信（智能机器人）
+</details>
+
+<details>
+<summary><strong>企业微信（智能机器人）</strong></summary>
 
 > 企业微信智能机器人（API 模式）通过公网 HTTPS 回调接收消息，仅支持被动回复
 
@@ -218,9 +213,10 @@ openclaw config set channels.wecom.encodingAESKey your-43-char-encoding-aes-key
 - `encodingAESKey` 必须为 43 位字符
 - 如遇回调校验失败，先确认 Token/EncodingAESKey 与后台一致
 
+</details>
 
-
-#### 飞书
+<details>
+<summary><strong>飞书</strong></summary>
 
 > 飞书应用需开启机器人能力，并使用「长连接接收消息」模式
 
@@ -233,6 +229,7 @@ openclaw config set channels.feishu.appSecret your-app-secret
 openclaw config set channels.feishu.sendMarkdownAsCard true
 ```
 
+</details>
 
 ### 3) 调试模式启动
 
@@ -289,7 +286,6 @@ cp -a /path/to/openclaw-china/skills/wecom-app-ops ~/.openclaw/skills/
 | `allowFrom` | 私聊白名单用户 ID |
 | `groupAllowFrom` | 群聊白名单群 ID |
 | `maxFileSizeMB` | 媒体文件大小限制 (MB)，默认 100 |
-| `replyFinalOnly` | 仅发送最终回复（非流式），默认 `false` |
 
 
 ### 会话配置（可选）

@@ -8,6 +8,8 @@ import {
   MediaTimeoutError,
   cleanupFileSafe,
   downloadToTempFile,
+  finalizeInboundMediaFile,
+  pruneInboundMediaDir,
 } from "./media-io.js";
 
 const tempDirs: string[] = [];
@@ -105,3 +107,74 @@ describe("cleanupFileSafe", () => {
   });
 });
 
+describe("inbound media retention", () => {
+  it("finalizes temp media into inbound/YYYY-MM-DD", async () => {
+    const tempDir = await createTempDir("shared-media-temp-");
+    const inboundDir = await createTempDir("shared-media-inbound-");
+    const sourcePath = path.join(tempDir, "img-1.jpg");
+    await fsPromises.writeFile(sourcePath, "abc", "utf8");
+
+    const finalPath = await finalizeInboundMediaFile({
+      filePath: sourcePath,
+      tempDir,
+      inboundDir,
+    });
+
+    expect(finalPath.startsWith(inboundDir)).toBe(true);
+    expect(fs.existsSync(finalPath)).toBe(true);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("does not move files outside tempDir", async () => {
+    const tempDir = await createTempDir("shared-media-temp-");
+    const inboundDir = await createTempDir("shared-media-inbound-");
+    const outsideDir = await createTempDir("shared-media-outside-");
+    const sourcePath = path.join(outsideDir, "a.txt");
+    await fsPromises.writeFile(sourcePath, "x", "utf8");
+
+    const finalPath = await finalizeInboundMediaFile({
+      filePath: sourcePath,
+      tempDir,
+      inboundDir,
+    });
+
+    expect(finalPath).toBe(sourcePath);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+  });
+
+  it("prunes only expired files in date dirs and keeps recent files", async () => {
+    const inboundDir = await createTempDir("shared-media-prune-");
+    const oldDir = path.join(inboundDir, "2024-01-01");
+    const newDir = path.join(inboundDir, "2024-01-02");
+    await fsPromises.mkdir(oldDir, { recursive: true });
+    await fsPromises.mkdir(newDir, { recursive: true });
+
+    const oldFile = path.join(oldDir, "old.jpg");
+    const newFile = path.join(newDir, "new.jpg");
+    const nestedDir = path.join(oldDir, "nested");
+    const nestedFile = path.join(nestedDir, "nested.jpg");
+    await fsPromises.writeFile(oldFile, "old", "utf8");
+    await fsPromises.writeFile(newFile, "new", "utf8");
+    await fsPromises.mkdir(nestedDir, { recursive: true });
+    await fsPromises.writeFile(nestedFile, "nested", "utf8");
+
+    const oldTs = new Date("2024-01-01T00:00:00.000Z");
+    const newTs = new Date("2024-01-02T00:00:00.000Z");
+    await fsPromises.utimes(oldDir, oldTs, oldTs);
+    await fsPromises.utimes(oldFile, oldTs, oldTs);
+    await fsPromises.utimes(newDir, newTs, newTs);
+    await fsPromises.utimes(newFile, newTs, newTs);
+
+    const nowMs = new Date("2024-01-03T00:00:00.000Z").getTime();
+    await pruneInboundMediaDir({
+      inboundDir,
+      keepDays: 1,
+      nowMs,
+    });
+
+    expect(fs.existsSync(oldFile)).toBe(false);
+    expect(fs.existsSync(newFile)).toBe(true);
+    expect(fs.existsSync(nestedFile)).toBe(true);
+    expect(fs.existsSync(oldDir)).toBe(true);
+  });
+});
