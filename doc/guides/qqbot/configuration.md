@@ -46,12 +46,6 @@
 
 ### 4. 开通权限与添加成员
 
-确保机器人具备需要的消息权限，例如：
-- C2C 私聊
-- 群聊 @
-- 频道 @
-- 频道私信
-
 <p align="center"><img src="../../images/qq-permissions.png" alt="权限配置" width="60%" /></p>
 
 可选：将机器人加入测试群，便于在 QQ 群中调试。
@@ -139,7 +133,6 @@ openclaw config set gateway.http.endpoints.chatCompletions.enabled true
 - 当前实现支持文本消息收发与图片发送（C2C/群聊）
 - QQ C2C/群聊富媒体接口暂不支持通用文件（`file_type=4`，例如 PDF），这是官方接口限制而非插件缺陷，会降级为文本提示
 - 频道内暂不支持媒体发送（会降级为文本 + URL）
-- 语音/视频媒体能力依赖平台权限与格式限制，需按官方接口开通与验证
 - 不支持平台级流式输出
 - 定时提醒通过 OpenClaw cron 触发（无需额外配置）
 

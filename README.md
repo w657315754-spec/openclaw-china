@@ -42,16 +42,17 @@
       <td align="center">✅ 可用</td>
       <td><a href="doc/guides/qqbot/configuration.md">QQ 渠道配置指南</a></td>
     </tr>
+      <tr>
+      <td>企业微信（智能机器人）</td>
+      <td align="center">✅ 可用</td>
+      <td><a href="doc/guides/wecom/configuration.md">企业微信智能机器人配置指南</a></td>
+    </tr>
     <tr>
       <td>飞书</td>
       <td align="center">✅ 可用</td>
       <td>-</td>
     </tr>
-    <tr>
-      <td>企业微信（智能机器人）</td>
-      <td align="center">✅ 可用</td>
-      <td>-</td>
-    </tr>
+  
   </tbody>
 </table>
 
@@ -100,7 +101,7 @@ openclaw plugins install @openclaw-china/dingtalk
 ```
 
 ```bash
-openclaw plugins install @openclaw-china/feishu
+openclaw plugins install @openclaw-china/feishu-china
 ```
 
 ```bash
@@ -268,6 +269,8 @@ MarkDown需申请相关权限。
 <details>
 <summary><strong>企业微信（智能机器人）</strong></summary>
 
+> 📖 **[企业微信智能机器人配置指南](doc/guides/wecom/configuration.md)**
+
 > 企业微信智能机器人（API 模式）通过公网 HTTPS 回调接收消息，仅支持被动回复
 
 ```bash
@@ -293,10 +296,10 @@ openclaw config set channels.wecom.encodingAESKey your-43-char-encoding-aes-key
 openclaw:
 
 ```bash
-openclaw config set channels.feishu.enabled true
-openclaw config set channels.feishu.appId cli_xxxxxx
-openclaw config set channels.feishu.appSecret your-app-secret
-openclaw config set channels.feishu.sendMarkdownAsCard true
+openclaw config set channels.feishu-china.enabled true
+openclaw config set channels.feishu-china.appId cli_xxxxxx
+openclaw config set channels.feishu-china.appSecret your-app-secret
+openclaw config set channels.feishu-china.sendMarkdownAsCard true
 ```
 
 </details>
@@ -382,7 +385,7 @@ openclaw plugins install -l ./packages/channels
       "appId": "your-app-id",
       "clientSecret": "your-app-secret"
     },
-    "feishu": {
+    "feishu-china": {
       "enabled": true,
       "appId": "cli_xxxxxx",
       "appSecret": "your-app-secret"

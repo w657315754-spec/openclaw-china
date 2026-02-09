@@ -22,8 +22,8 @@ import {
   sendMessageFeishu,
   setFeishuRuntime,
   getFeishuRuntime,
-} from "@openclaw-china/feishu";
-import feishuEntry from "@openclaw-china/feishu";
+} from "@openclaw-china/feishu-china";
+import feishuEntry from "@openclaw-china/feishu-china";
 import {
   wecomPlugin,
   DEFAULT_ACCOUNT_ID as WECOM_DEFAULT_ACCOUNT_ID,
@@ -96,7 +96,7 @@ export type {
   FeishuConfig,
   ResolvedFeishuAccount,
   FeishuSendResult,
-} from "@openclaw-china/feishu";
+} from "@openclaw-china/feishu-china";
 export type { WecomConfig, ResolvedWecomAccount, WecomInboundMessage } from "@openclaw-china/wecom";
 export type {
   WecomAppConfig,
@@ -127,7 +127,7 @@ export interface ChannelConfig {
 export interface MoltbotConfig {
   channels?: {
     dingtalk?: ChannelConfig;
-    feishu?: ChannelConfig;
+    "feishu-china"?: ChannelConfig;
     wecom?: ChannelConfig;
     "wecom-app"?: ChannelConfig;
     qqbot?: ChannelConfig;
@@ -150,7 +150,7 @@ export interface MoltbotPluginApi {
 /**
  * 支持的渠道列表
  */
-export const SUPPORTED_CHANNELS = ["dingtalk", "feishu", "wecom", "wecom-app", "qqbot"] as const;
+export const SUPPORTED_CHANNELS = ["dingtalk", "feishu-china", "wecom", "wecom-app", "qqbot"] as const;
 // TODO: 后续添加 "qq"
 
 export type SupportedChannel = (typeof SUPPORTED_CHANNELS)[number];
@@ -161,7 +161,7 @@ const channelPlugins: Record<SupportedChannel, { register: (api: MoltbotPluginAp
       dingtalkEntry.register(api);
     },
   },
-  feishu: {
+  "feishu-china": {
     register: (api: MoltbotPluginApi) => {
       feishuEntry.register(api);
     },
