@@ -1,233 +1,357 @@
 /**
- * 企业微信 ChannelPlugin 实现
+ * 企业微信 OpenClaw Channel Plugin
+ * 参考 QQ 插件结构
  */
 
-import type { ResolvedWecomAccount, WecomConfig } from "./types.js";
+import type { ChannelPlugin, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { WeComConfig, WeComMessage, WeComTextMessage, WeComMixedMessage } from "./types.js";
+import { WXBizJsonMsgCrypt } from "./crypto.js";
 import {
-  DEFAULT_ACCOUNT_ID,
-  listWecomAccountIds,
-  resolveDefaultWecomAccountId,
-  resolveWecomAccount,
-  resolveAllowFrom,
-  resolveGroupAllowFrom,
-  resolveRequireMention,
-  WecomConfigJsonSchema,
-  type PluginConfig,
-} from "./config.js";
-import { registerWecomWebhookTarget } from "./monitor.js";
-import { setWecomRuntime } from "./runtime.js";
+  extractMediaUrls,
+  downloadAndSaveMedia,
+  buildWeComMediaPayload,
+  type WeComMediaInfo,
+} from "./media.js";
+import { getWeComRuntime, hasWeComRuntime } from "./runtime.js";
 
-const meta = {
+// =============================================================================
+// Types
+// =============================================================================
+
+export interface ResolvedWeComAccount {
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+  botId?: string;
+}
+
+// 存储活跃的流式会话
+const activeSessions = new Map<
+  string,
+  {
+    streamId: string;
+    nonce: string;
+    timestamp: string;
+    responseUrl?: string;
+    crypto: WXBizJsonMsgCrypt;
+  }
+>();
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+const DEFAULT_ACCOUNT_ID = "default";
+
+function resolveWeComAccount(cfg: OpenClawConfig, accountId?: string | null): ResolvedWeComAccount {
+  const id = accountId || DEFAULT_ACCOUNT_ID;
+  const wecomConfig = cfg.channels?.wecom as WeComConfig | undefined;
+
+  if (!wecomConfig) {
+    return { accountId: id, enabled: false, configured: false };
+  }
+
+  return {
+    accountId: id,
+    enabled: wecomConfig.enabled !== false,
+    configured: Boolean(wecomConfig.token && wecomConfig.encodingAESKey),
+    botId: wecomConfig.botId,
+  };
+}
+
+function listWeComAccountIds(cfg: OpenClawConfig): string[] {
+  const wecomConfig = cfg.channels?.wecom as WeComConfig | undefined;
+  if (!wecomConfig?.token) return [];
+  return [DEFAULT_ACCOUNT_ID];
+}
+
+/** 提取消息文本 */
+function extractMessageText(message: WeComMessage): string {
+  if (message.msgtype === "text") {
+    return (message as WeComTextMessage).text.content;
+  }
+  if (message.msgtype === "mixed") {
+    const mixed = message as WeComMixedMessage;
+    return mixed.mixed.msg_item
+      .filter((item) => item.msgtype === "text")
+      .map((item) => (item as { msgtype: "text"; text: { content: string } }).text.content)
+      .join("\n");
+  }
+  if (message.msgtype === "voice") {
+    return (message as any).voice.content;
+  }
+  return "";
+}
+
+/** 发送文本消息 */
+async function sendTextMessage(
+  to: string,
+  text: string,
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const session = activeSessions.get(to);
+  if (!session?.responseUrl) {
+    return { success: false, error: "No active session for target" };
+  }
+
+  try {
+    const response = await fetch(session.responseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        msgtype: "text",
+        text: { content: text },
+      }),
+    });
+
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
+// =============================================================================
+// Channel Plugin
+// =============================================================================
+
+export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
   id: "wecom",
-  label: "WeCom",
-  selectionLabel: "WeCom (企业微信)",
-  docsPath: "/channels/wecom",
-  docsLabel: "wecom",
-  blurb: "企业微信智能机器人回调",
-  aliases: ["wechatwork", "wework", "qywx", "企微", "企业微信"],
-  order: 85,
-} as const;
-
-const unregisterHooks = new Map<string, () => void>();
-
-export const wecomPlugin = {
-  id: "wecom",
-
   meta: {
-    ...meta,
+    id: "wecom",
+    label: "WeCom",
+    selectionLabel: "企业微信 (智能机器人)",
+    docsPath: "/channels/wecom",
+    docsLabel: "wecom",
+    blurb: "企业微信智能机器人",
+    order: 76,
   },
-
   capabilities: {
-    chatTypes: ["direct", "group"] as const,
-    media: false,
+    chatTypes: ["direct", "group"],
+    media: true,
     reactions: false,
     threads: false,
-    edit: false,
-    reply: true,
-    polls: false,
+    nativeCommands: false,
+    blockStreaming: false,
   },
-
-  configSchema: WecomConfigJsonSchema,
-
   reload: { configPrefixes: ["channels.wecom"] },
-
   config: {
-    listAccountIds: (cfg: PluginConfig): string[] => listWecomAccountIds(cfg),
-
-    resolveAccount: (cfg: PluginConfig, accountId?: string): ResolvedWecomAccount =>
-      resolveWecomAccount({ cfg, accountId }),
-
-    defaultAccountId: (cfg: PluginConfig): string => resolveDefaultWecomAccountId(cfg),
-
-    setAccountEnabled: (params: { cfg: PluginConfig; accountId?: string; enabled: boolean }): PluginConfig => {
-      const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccount = Boolean(params.cfg.channels?.wecom?.accounts?.[accountId]);
-      if (!useAccount) {
-        return {
-          ...params.cfg,
-          channels: {
-            ...params.cfg.channels,
-            wecom: {
-              ...(params.cfg.channels?.wecom ?? {}),
-              enabled: params.enabled,
-            } as WecomConfig,
-          },
-        };
-      }
-
-      return {
-        ...params.cfg,
-        channels: {
-          ...params.cfg.channels,
-          wecom: {
-            ...(params.cfg.channels?.wecom ?? {}),
-            accounts: {
-              ...(params.cfg.channels?.wecom?.accounts ?? {}),
-              [accountId]: {
-                ...(params.cfg.channels?.wecom?.accounts?.[accountId] ?? {}),
-                enabled: params.enabled,
-              },
-            },
-          } as WecomConfig,
-        },
-      };
-    },
-
-    deleteAccount: (params: { cfg: PluginConfig; accountId?: string }): PluginConfig => {
-      const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
-      const next = { ...params.cfg };
-      const current = next.channels?.wecom;
-      if (!current) return next;
-
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        const { accounts: _ignored, defaultAccount: _ignored2, ...rest } = current as WecomConfig;
-        next.channels = {
-          ...next.channels,
-          wecom: { ...(rest as WecomConfig), enabled: false },
-        };
-        return next;
-      }
-
-      const accounts = { ...(current.accounts ?? {}) };
-      delete accounts[accountId];
-
-      next.channels = {
-        ...next.channels,
-        wecom: {
-          ...(current as WecomConfig),
-          accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
-        },
-      };
-
-      return next;
-    },
-
-    isConfigured: (account: ResolvedWecomAccount): boolean => account.configured,
-
-    describeAccount: (account: ResolvedWecomAccount) => ({
+    listAccountIds: (cfg) => listWeComAccountIds(cfg),
+    resolveAccount: (cfg, accountId) => resolveWeComAccount(cfg, accountId),
+    defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+    isConfigured: (account) => account.configured,
+    isEnabled: (account) => account.enabled,
+    describeAccount: (account) => ({
       accountId: account.accountId,
-      name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      webhookPath: account.config.webhookPath ?? "/wecom",
     }),
-
-    resolveAllowFrom: (params: { cfg: PluginConfig; accountId?: string }): string[] => {
-      const account = resolveWecomAccount({ cfg: params.cfg, accountId: params.accountId });
-      return resolveAllowFrom(account.config);
-    },
-
-    formatAllowFrom: (params: { allowFrom: (string | number)[] }): string[] =>
-      params.allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.toLowerCase()),
   },
-
-  groups: {
-    resolveRequireMention: (params: { cfg: PluginConfig; accountId?: string; account?: ResolvedWecomAccount }): boolean => {
-      const account = params.account ?? resolveWecomAccount({ cfg: params.cfg ?? {}, accountId: params.accountId });
-      return resolveRequireMention(account.config);
+  pairing: {
+    idLabel: "wecomUserId",
+    normalizeAllowEntry: (entry) => entry.replace(/^wecom:/i, ""),
+  },
+  messaging: {
+    normalizeTarget: (target) => {
+      if (!target) return null;
+      const trimmed = target.trim();
+      if (!trimmed) return null;
+      return trimmed;
+    },
+    targetResolver: {
+      looksLikeId: (raw) => {
+        if (!raw) return false;
+        return raw.trim().length > 0;
+      },
     },
   },
-
   outbound: {
     deliveryMode: "direct",
-    sendText: async () => {
+    textChunkLimit: 4000,
+    sendText: async ({ to, text }) => {
+      const result = await sendTextMessage(to, text);
       return {
         channel: "wecom",
-        ok: false,
-        messageId: "",
-        error: new Error("WeCom intelligent bot only supports replying within callbacks (no standalone sendText)."),
+        ok: result.success,
+        messageId: result.messageId,
+        error: result.error,
       };
     },
   },
+  status: {
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    },
+    buildAccountSnapshot: ({ account, runtime }) => ({
+      accountId: account.accountId,
+      enabled: account.enabled,
+      configured: account.configured,
+      running: runtime?.running ?? false,
+      lastStartAt: runtime?.lastStartAt ?? null,
+      lastStopAt: runtime?.lastStopAt ?? null,
+      lastError: runtime?.lastError ?? null,
+    }),
+  },
+  // HTTP 回调处理
+  http: {
+    routes: [
+      {
+        method: "GET",
+        path: "/wecom/callback",
+        handler: async (req, res, ctx) => {
+          const wecomConfig = ctx.cfg.channels?.wecom as WeComConfig | undefined;
+          if (!wecomConfig?.token || !wecomConfig?.encodingAESKey) {
+            res.writeHead(500);
+            res.end("WeCom not configured");
+            return;
+          }
 
-  gateway: {
-    startAccount: async (ctx: {
-      cfg: PluginConfig;
-      runtime?: unknown;
-      abortSignal?: AbortSignal;
-      accountId: string;
-      setStatus?: (status: Record<string, unknown>) => void;
-      log?: { info: (msg: string) => void; error: (msg: string) => void };
-    }): Promise<void> => {
-      ctx.setStatus?.({ accountId: ctx.accountId });
+          const url = new URL(req.url || "/", `http://${req.headers.host}`);
+          const params = url.searchParams;
+          const msgSignature = params.get("msg_signature") || "";
+          const timestamp = params.get("timestamp") || "";
+          const nonce = params.get("nonce") || "";
+          const echoStr = params.get("echostr") || "";
 
-      if (ctx.runtime) {
-        const candidate = ctx.runtime as {
-          channel?: {
-            routing?: { resolveAgentRoute?: unknown };
-            reply?: { dispatchReplyFromConfig?: unknown };
-          };
-        };
-        if (candidate.channel?.routing?.resolveAgentRoute && candidate.channel?.reply?.dispatchReplyFromConfig) {
-          setWecomRuntime(ctx.runtime as Record<string, unknown>);
-        }
-      }
-
-      const account = resolveWecomAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
-      if (!account.configured) {
-        ctx.log?.info(`[wecom] account ${ctx.accountId} not configured; webhook not registered`);
-        ctx.setStatus?.({ accountId: ctx.accountId, running: false, configured: false });
-        return;
-      }
-
-      const path = (account.config.webhookPath ?? "/wecom").trim();
-      const unregister = registerWecomWebhookTarget({
-        account,
-        config: (ctx.cfg ?? {}) as PluginConfig,
-        runtime: {
-          log: ctx.log?.info ?? console.log,
-          error: ctx.log?.error ?? console.error,
+          try {
+            const crypto = new WXBizJsonMsgCrypt(wecomConfig.token, wecomConfig.encodingAESKey, "");
+            const result = crypto.verifyURL(msgSignature, timestamp, nonce, echoStr);
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            res.end(result);
+          } catch (err) {
+            console.error("[WeCom] URL verification failed:", err);
+            res.writeHead(400);
+            res.end("Verification failed");
+          }
         },
-        path,
-        statusSink: (patch) => ctx.setStatus?.({ accountId: ctx.accountId, ...patch }),
-      });
+      },
+      {
+        method: "POST",
+        path: "/wecom/callback",
+        handler: async (req, res, ctx) => {
+          const wecomConfig = ctx.cfg.channels?.wecom as WeComConfig | undefined;
+          if (!wecomConfig?.token || !wecomConfig?.encodingAESKey) {
+            res.writeHead(500);
+            res.end("WeCom not configured");
+            return;
+          }
 
-      const existing = unregisterHooks.get(ctx.accountId);
-      if (existing) existing();
-      unregisterHooks.set(ctx.accountId, unregister);
+          const url = new URL(req.url || "/", `http://${req.headers.host}`);
+          const params = url.searchParams;
+          const msgSignature = params.get("msg_signature") || "";
+          const timestamp = params.get("timestamp") || "";
+          const nonce = params.get("nonce") || "";
 
-      ctx.log?.info(`[wecom] webhook registered at ${path} for account ${ctx.accountId}`);
-      ctx.setStatus?.({
-        accountId: ctx.accountId,
-        running: true,
-        configured: true,
-        webhookPath: path,
-        lastStartAt: Date.now(),
-      });
-    },
+          // 读取 body
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) {
+            chunks.push(chunk);
+          }
+          const body = Buffer.concat(chunks).toString();
 
-    stopAccount: async (ctx: { accountId: string; setStatus?: (status: Record<string, unknown>) => void }): Promise<void> => {
-      const unregister = unregisterHooks.get(ctx.accountId);
-      if (unregister) {
-        unregister();
-        unregisterHooks.delete(ctx.accountId);
-      }
-      ctx.setStatus?.({ accountId: ctx.accountId, running: false, lastStopAt: Date.now() });
-    },
+          try {
+            const crypto = new WXBizJsonMsgCrypt(wecomConfig.token, wecomConfig.encodingAESKey, "");
+            const decrypted = crypto.decryptMsg(body, msgSignature, timestamp, nonce);
+            const message = JSON.parse(decrypted) as WeComMessage;
+
+            console.log("[WeCom] Received:", message.msgtype, message.msgid);
+
+            if (!message.msgtype) {
+              res.writeHead(200, { "Content-Type": "text/plain" });
+              res.end("success");
+              return;
+            }
+
+            // 处理流式刷新
+            if (message.msgtype === "stream") {
+              const session = activeSessions.get(message.from.userid);
+              if (session) {
+                // TODO: 返回流式内容
+                const reply = session.crypto.encryptMsg(
+                  JSON.stringify({
+                    msgtype: "stream",
+                    stream: { id: session.streamId, finish: false, content: "..." },
+                  }),
+                  nonce,
+                  timestamp,
+                );
+                res.writeHead(200, { "Content-Type": "text/plain" });
+                res.end(reply);
+                return;
+              }
+            }
+
+            // 提取文本
+            const text = extractMessageText(message);
+
+            // 提取媒体 URL
+            const mediaUrls = extractMediaUrls(message);
+
+            // 如果既没有文本也没有媒体，跳过
+            if (!text && mediaUrls.length === 0) {
+              res.writeHead(200, { "Content-Type": "text/plain" });
+              res.end("success");
+              return;
+            }
+
+            // 生成 stream ID
+            const streamId = Math.random().toString(36).substring(2, 12);
+
+            // 保存会话
+            activeSessions.set(message.from.userid, {
+              streamId,
+              nonce,
+              timestamp,
+              responseUrl: message.response_url,
+              crypto,
+            });
+
+            // 下载媒体文件
+            let mediaList: WeComMediaInfo[] = [];
+            if (mediaUrls.length > 0 && hasWeComRuntime()) {
+              const core = getWeComRuntime();
+              mediaList = await downloadAndSaveMedia({
+                urls: mediaUrls,
+                maxBytes: 30 * 1024 * 1024, // 30MB
+                saveMediaBuffer: core.channel.media.saveMediaBuffer.bind(core.channel.media),
+                detectMime: core.media.detectMime.bind(core.media),
+                log: console.log,
+              });
+            }
+
+            const mediaPayload = buildWeComMediaPayload(mediaList);
+
+            // TODO: 转发到 Agent 处理
+            // 这里需要接入 OpenClaw 的消息路由系统
+            console.log("[WeCom] Message from", message.from.userid, ":", text || "[media]");
+            if (mediaList.length > 0) {
+              console.log("[WeCom] Media:", mediaList.map((m) => m.path).join(", "));
+            }
+
+            // 返回初始流式响应
+            const reply = crypto.encryptMsg(
+              JSON.stringify({
+                msgtype: "stream",
+                stream: { id: streamId, finish: false, content: "" },
+              }),
+              nonce,
+              timestamp,
+            );
+            res.writeHead(200, { "Content-Type": "text/plain" });
+            res.end(reply);
+          } catch (err) {
+            console.error("[WeCom] Error handling message:", err);
+            res.writeHead(500);
+            res.end("Internal error");
+          }
+        },
+      },
+    ],
   },
 };
-
-export { DEFAULT_ACCOUNT_ID } from "./config.js";
