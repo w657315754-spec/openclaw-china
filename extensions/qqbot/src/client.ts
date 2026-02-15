@@ -1,7 +1,22 @@
 import { httpGet, httpPost, type HttpRequestOptions } from "@openclaw-china/shared";
 
-const API_BASE = "https://api.sgroup.qq.com";
+const API_BASE_PRODUCTION = "https://api.sgroup.qq.com";
+const API_BASE_SANDBOX = "https://sandbox.api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
+
+let useSandbox = false;
+
+export function setSandboxMode(sandbox: boolean): void {
+  useSandbox = sandbox;
+}
+
+export function isSandboxMode(): boolean {
+  return useSandbox;
+}
+
+function getApiBase(): string {
+  return useSandbox ? API_BASE_SANDBOX : API_BASE_PRODUCTION;
+}
 
 type TokenCache = {
   token: string;
@@ -75,7 +90,7 @@ async function apiGet<T>(
   path: string,
   options?: HttpRequestOptions
 ): Promise<T> {
-  const url = `${API_BASE}${path}`;
+  const url = `${getApiBase()}${path}`;
   return httpGet<T>(url, {
     ...options,
     headers: {
@@ -91,7 +106,7 @@ async function apiPost<T>(
   body: unknown,
   options?: HttpRequestOptions
 ): Promise<T> {
-  const url = `${API_BASE}${path}`;
+  const url = `${getApiBase()}${path}`;
   return httpPost<T>(url, body, {
     ...options,
     headers: {

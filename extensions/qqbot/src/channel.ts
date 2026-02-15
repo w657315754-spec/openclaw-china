@@ -127,6 +127,7 @@ export const qqbotPlugin = {
         enabled: { type: "boolean" },
         appId: { type: "string" },
         clientSecret: { type: "string" },
+        sandbox: { type: "boolean" },
         asr: {
           type: "object",
           additionalProperties: false,

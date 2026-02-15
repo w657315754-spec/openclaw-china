@@ -13,6 +13,7 @@ export const QQBotConfigSchema = z.object({
   enabled: z.boolean().optional().default(true),
   appId: optionalCoercedString,
   clientSecret: optionalCoercedString,
+  sandbox: z.boolean().optional().default(false),
   asr: z
     .object({
       enabled: z.boolean().optional().default(false),

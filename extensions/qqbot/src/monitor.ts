@@ -6,7 +6,7 @@ import WebSocket from "ws";
 import { createLogger, type Logger } from "./logger.js";
 import { handleQQBotDispatch } from "./bot.js";
 import { QQBotConfigSchema } from "./config.js";
-import { clearTokenCache, getAccessToken, getGatewayUrl } from "./client.js";
+import { clearTokenCache, getAccessToken, getGatewayUrl, setSandboxMode } from "./client.js";
 import type { QQBotConfig } from "./types.js";
 
 export interface MonitorQQBotOpts {
@@ -72,6 +72,12 @@ export async function monitorQQBotProvider(opts: MonitorQQBotOpts = {}): Promise
 
   if (!qqCfg.appId || !qqCfg.clientSecret) {
     throw new Error("QQBot not configured (missing appId or clientSecret)");
+  }
+
+  // 设置沙箱模式
+  setSandboxMode(qqCfg.sandbox ?? false);
+  if (qqCfg.sandbox) {
+    logger.info("QQBot running in sandbox mode");
   }
 
   activePromise = new Promise<void>((resolve, reject) => {
