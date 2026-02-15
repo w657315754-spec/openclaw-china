@@ -93,7 +93,8 @@
     "release:major": "npm run build && npm version major && npm publish"
   },
   "dependencies": {
-    "@openclaw-china/shared": "0.1.13"
+    "@openclaw-china/shared": "0.1.13",
+    "undici": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
