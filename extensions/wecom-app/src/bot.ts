@@ -286,14 +286,14 @@ async function buildInboundBody(params: {
   cfg: PluginConfig;
   account: ResolvedWecomAppAccount;
   msg: WecomAppInboundMessage;
-}): Promise<{ text: string; cleanup: () => Promise<void> }> {
+}): Promise<{ text: string; mediaPaths: string[]; cleanup: () => Promise<void> }> {
   // 尽可能使用增强的消息体（将入站媒体保存到本地）
   const enriched = await enrichInboundContentWithMedia({
     cfg: params.cfg,
     account: params.account,
     msg: params.msg,
   });
-  return { text: enriched.text, cleanup: enriched.cleanup };
+  return { text: enriched.text, mediaPaths: enriched.mediaPaths, cleanup: enriched.cleanup };
 }
 
 /**
@@ -346,7 +346,7 @@ export async function dispatchWecomAppMessage(params: {
     peer: { kind: "dm", id: chatId },
   });
 
-  const { text: rawBody, cleanup } = await buildInboundBody({ cfg: safeCfg, account, msg });
+  const { text: rawBody, mediaPaths, cleanup } = await buildInboundBody({ cfg: safeCfg, account, msg });
   const fromLabel = `user:${senderId}`;
 
   const storePath = channel.session?.resolveStorePath?.(safeCfg.session?.store, {
@@ -382,6 +382,23 @@ export async function dispatchWecomAppMessage(params: {
   const from = `wecom-app:user:${senderId}`;
   const to = `user:${senderId}`;
 
+  // 构建媒体字段
+  const mediaPayload: Record<string, unknown> = {};
+  if (mediaPaths.length > 0) {
+    mediaPayload.MediaPath = mediaPaths[0];
+    mediaPayload.MediaPaths = mediaPaths;
+    // 推断媒体类型
+    const inferType = (p: string) => {
+      const lower = p.toLowerCase();
+      if (lower.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/)) return "image";
+      if (lower.match(/\.(mp3|wav|amr|ogg|m4a)$/)) return "audio";
+      if (lower.match(/\.(mp4|mov|avi|mkv)$/)) return "video";
+      return "file";
+    };
+    mediaPayload.MediaType = inferType(mediaPaths[0]);
+    mediaPayload.MediaTypes = mediaPaths.map(inferType);
+  }
+
   const ctxPayload = (channel.reply?.finalizeInboundContext
     ? channel.reply.finalizeInboundContext({
         Body: body,
@@ -400,6 +417,7 @@ export async function dispatchWecomAppMessage(params: {
         MessageSid: msgid,
         OriginatingChannel: "wecom-app",
         OriginatingTo: to,
+        ...mediaPayload,
       })
     : {
         Body: body,
@@ -418,6 +436,7 @@ export async function dispatchWecomAppMessage(params: {
         MessageSid: msgid,
         OriginatingChannel: "wecom-app",
         OriginatingTo: to,
+        ...mediaPayload,
       }) as {
     SessionKey?: string;
     [key: string]: unknown;
