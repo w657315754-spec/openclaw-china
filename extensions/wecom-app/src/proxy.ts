@@ -1,55 +1,34 @@
 /**
- * HTTP 代理支持
+ * HTTP 代理支持（仅用于企业微信 API）
  * 
- * 读取 HTTP_PROXY / HTTPS_PROXY 环境变量，为 fetch 提供代理支持
+ * 硬编码代理地址，不依赖环境变量，避免影响其他请求
  */
 import { ProxyAgent, type Dispatcher } from "undici";
+
+// 企业微信 API 专用代理（通过 SSH 隧道走固定 IP）
+const WECOM_PROXY_URL = "http://127.0.0.1:8888";
 
 let cachedDispatcher: Dispatcher | undefined;
 
 /**
- * 获取代理 URL（优先 HTTPS_PROXY，其次 HTTP_PROXY）
+ * 获取代理 dispatcher（单例）
  */
-export function getProxyUrl(): string | undefined {
-  return (
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy ||
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    undefined
-  );
-}
-
-/**
- * 获取代理 dispatcher（单例，避免重复创建）
- */
-export function getProxyDispatcher(): Dispatcher | undefined {
-  const proxyUrl = getProxyUrl();
-  if (!proxyUrl) return undefined;
-
+export function getProxyDispatcher(): Dispatcher {
   if (!cachedDispatcher) {
-    cachedDispatcher = new ProxyAgent(proxyUrl);
-    console.log(`[wecom-app] Using proxy: ${proxyUrl.replace(/:[^:@]+@/, ':***@')}`);
+    cachedDispatcher = new ProxyAgent(WECOM_PROXY_URL);
+    console.log(`[wecom-app] Using proxy: ${WECOM_PROXY_URL}`);
   }
-
   return cachedDispatcher;
 }
 
 /**
- * 代理版 fetch（自动检测环境变量）
+ * 代理版 fetch（专用于企业微信 API 调用）
  */
 export async function proxyFetch(
   url: string | URL | Request,
   init?: RequestInit
 ): Promise<Response> {
   const dispatcher = getProxyDispatcher();
-
-  if (dispatcher) {
-    // undici 的 fetch 支持 dispatcher 选项
-    const { fetch: undiciFetch } = await import("undici");
-    return undiciFetch(url, { ...init, dispatcher } as Parameters<typeof undiciFetch>[1]);
-  }
-
-  // 无代理时使用原生 fetch
-  return fetch(url, init);
+  const { fetch: undiciFetch } = await import("undici");
+  return undiciFetch(url, { ...init, dispatcher } as Parameters<typeof undiciFetch>[1]);
 }
