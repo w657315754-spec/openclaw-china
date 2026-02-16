@@ -9,6 +9,8 @@ import {
   uploadC2CMedia,
   uploadGroupMedia,
   MediaFileType,
+  setAppId,
+  setSandboxMode,
 } from "./client.js";
 import type { QQBotConfig } from "./types.js";
 import {
@@ -98,6 +100,10 @@ export async function sendFileQQBot(params: SendFileQQBotParams): Promise<{ id: 
   const maxFileSizeMB = cfg.maxFileSizeMB ?? 100;
   const mediaTimeoutMs = cfg.mediaTimeoutMs ?? 30000;
   const maxSizeBytes = Math.floor(maxFileSizeMB * 1024 * 1024);
+
+  // 设置 appId 和 sandbox 模式（确保 API 请求带正确的 header）
+  setAppId(cfg.appId);
+  setSandboxMode(cfg.sandbox ?? false);
 
   const accessToken = await getAccessToken(cfg.appId, cfg.clientSecret);
   let fileInfo: string;

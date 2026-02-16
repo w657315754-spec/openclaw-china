@@ -6,7 +6,7 @@ import WebSocket from "ws";
 import { createLogger, type Logger } from "./logger.js";
 import { handleQQBotDispatch } from "./bot.js";
 import { QQBotConfigSchema } from "./config.js";
-import { clearTokenCache, getAccessToken, getGatewayUrl, setSandboxMode } from "./client.js";
+import { clearTokenCache, getAccessToken, getGatewayUrl, setSandboxMode, setAppId } from "./client.js";
 import type { QQBotConfig } from "./types.js";
 
 export interface MonitorQQBotOpts {
@@ -76,6 +76,7 @@ export async function monitorQQBotProvider(opts: MonitorQQBotOpts = {}): Promise
 
   // 设置沙箱模式
   setSandboxMode(qqCfg.sandbox ?? false);
+  setAppId(qqCfg.appId);
   if (qqCfg.sandbox) {
     logger.info("QQBot running in sandbox mode");
   }
@@ -287,6 +288,15 @@ export async function monitorQQBotProvider(opts: MonitorQQBotOpts = {}): Promise
 
         ws.on("close", (code, reason) => {
           logger.warn(`gateway socket closed (${code}) ${String(reason)}`);
+          
+          // 4900-4913 是内部错误，需要清除 session 和 token 重新初始化
+          if (code >= 4900 && code <= 4913) {
+            logger.warn(`internal error code ${code}, clearing session and token for full re-init`);
+            sessionId = null;
+            lastSeq = null;
+            clearTokenCache();
+          }
+          
           cleanupSocket();
           scheduleReconnect("socket closed");
         });

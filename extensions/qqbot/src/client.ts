@@ -5,9 +5,14 @@ const API_BASE_SANDBOX = "https://sandbox.api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 
 let useSandbox = false;
+let currentAppId = "";
 
 export function setSandboxMode(sandbox: boolean): void {
   useSandbox = sandbox;
+}
+
+export function setAppId(appId: string): void {
+  currentAppId = appId;
 }
 
 export function isSandboxMode(): boolean {
@@ -111,6 +116,7 @@ async function apiPost<T>(
     ...options,
     headers: {
       Authorization: `QQBot ${accessToken}`,
+      ...(currentAppId ? { "X-Union-Appid": currentAppId } : {}),
       ...(options?.headers ?? {}),
     },
   });
@@ -217,6 +223,28 @@ export async function sendC2CInputNotify(params: {
   );
 }
 
+export async function cancelC2CInputNotify(params: {
+  accessToken: string;
+  openid: string;
+  messageId?: string;
+}): Promise<void> {
+  const msgSeq = nextMsgSeq(params.messageId);
+  await apiPost(
+    params.accessToken,
+    `/v2/users/${params.openid}/messages`,
+    {
+      msg_type: 6,
+      input_notify: {
+        input_type: 1,
+        input_second: 0,
+      },
+      msg_seq: msgSeq,
+      ...(params.messageId ? { msg_id: params.messageId } : {}),
+    },
+    { timeout: 15000 }
+  );
+}
+
 export enum MediaFileType {
   IMAGE = 1,
   VIDEO = 2,
@@ -237,12 +265,14 @@ export async function uploadC2CMedia(params: {
   fileType: MediaFileType;
   url?: string;
   fileData?: string;
+  srvSendMsg?: boolean;
 }): Promise<UploadMediaResponse> {
   const body: Record<string, unknown> = {
     file_type: params.fileType,
+    srv_send_msg: params.srvSendMsg ?? false,
   };
   if (params.url) {
-    body.url = params.url;
+    body.url = encodeURI(params.url);
   } else if (params.fileData) {
     body.file_data = params.fileData;
   } else {
@@ -260,12 +290,14 @@ export async function uploadGroupMedia(params: {
   fileType: MediaFileType;
   url?: string;
   fileData?: string;
+  srvSendMsg?: boolean;
 }): Promise<UploadMediaResponse> {
   const body: Record<string, unknown> = {
     file_type: params.fileType,
+    srv_send_msg: params.srvSendMsg ?? false,
   };
   if (params.url) {
-    body.url = params.url;
+    body.url = encodeURI(params.url);
   } else if (params.fileData) {
     body.file_data = params.fileData;
   } else {

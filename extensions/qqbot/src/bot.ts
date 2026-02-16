@@ -624,7 +624,7 @@ async function dispatchToAgent(params: {
       cfg: { channels: { qqbot: qqCfg } },
       to: `user:${inbound.c2cOpenid}`,
       replyToId: inbound.messageId,
-      inputSecond: 60,
+      inputSecond: 10,
     });
     if (typing.error) {
       logger.warn(`sendTyping failed: ${typing.error}`);
@@ -897,6 +897,14 @@ async function dispatchToAgent(params: {
         },
       },
     });
+    // Cancel typing indicator after reply is done
+    if (inbound.c2cOpenid) {
+      await qqbotOutbound.cancelTyping({
+        cfg: { channels: { qqbot: qqCfg } },
+        to: `user:${inbound.c2cOpenid}`,
+        replyToId: inbound.messageId,
+      }).catch((err) => logger.warn(`cancelTyping failed: ${err}`));
+    }
     return;
   }
 
@@ -933,6 +941,15 @@ async function dispatchToAgent(params: {
   });
 
   dispatcherResult.markDispatchIdle?.();
+
+  // Cancel typing indicator after reply is done
+  if (inbound.c2cOpenid) {
+    await qqbotOutbound.cancelTyping({
+      cfg: { channels: { qqbot: qqCfg } },
+      to: `user:${inbound.c2cOpenid}`,
+      replyToId: inbound.messageId,
+    }).catch((err) => logger.warn(`cancelTyping failed: ${err}`));
+  }
 }
 
 function shouldHandleMessage(event: QQInboundMessage, qqCfg: QQBotConfig, logger: Logger): boolean {

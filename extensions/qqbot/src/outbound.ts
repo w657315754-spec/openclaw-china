@@ -6,6 +6,7 @@ import { QQBotConfigSchema } from "./config.js";
 import {
   getAccessToken,
   sendC2CInputNotify,
+  cancelC2CInputNotify,
   sendC2CMessage,
   sendGroupMessage,
   sendChannelMessage,
@@ -181,6 +182,41 @@ export const qqbotOutbound = {
         openid: target.id,
         messageId: replyToId,
         inputSecond,
+      });
+      return { channel: "qqbot" };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { channel: "qqbot", error: message };
+    }
+  },
+
+  cancelTyping: async (params: {
+    cfg: OutboundConfig;
+    to: string;
+    replyToId?: string;
+  }): Promise<QQBotSendResult> => {
+    const { cfg, to, replyToId } = params;
+    const rawCfg = cfg.channels?.qqbot;
+    const parsed = rawCfg ? QQBotConfigSchema.safeParse(rawCfg) : null;
+    const qqCfg = parsed?.success ? parsed.data : rawCfg;
+    if (!qqCfg) {
+      return { channel: "qqbot", error: "QQBot channel not configured" };
+    }
+    if (!qqCfg.appId || !qqCfg.clientSecret) {
+      return { channel: "qqbot", error: "QQBot not configured (missing appId/clientSecret)" };
+    }
+
+    const target = parseTarget(to);
+    if (target.kind !== "c2c") {
+      return { channel: "qqbot" };
+    }
+
+    try {
+      const accessToken = await getAccessToken(qqCfg.appId, qqCfg.clientSecret);
+      await cancelC2CInputNotify({
+        accessToken,
+        openid: target.id,
+        messageId: replyToId,
       });
       return { channel: "qqbot" };
     } catch (err) {
