@@ -803,6 +803,27 @@ async function dispatchToAgent(params: {
 
   const replyFinalOnly = qqCfg.replyFinalOnly ?? false;
 
+  // 思考过程早期发送状态跟踪
+  let thinkingSent = false;
+
+  const sendTextChunked = async (text: string): Promise<void> => {
+    const converted = textApi?.convertMarkdownTables
+      ? textApi.convertMarkdownTables(text, resolvedTableMode)
+      : text;
+    const chunks = chunkText(converted);
+    for (const chunk of chunks) {
+      const result = await qqbotOutbound.sendText({
+        cfg: { channels: { qqbot: qqCfg } },
+        to: target.to,
+        text: chunk,
+        replyToId: inbound.messageId,
+      });
+      if (result.error) {
+        logger.error(`sendText failed: ${result.error}`);
+      }
+    }
+  };
+
   const deliver = async (payload: unknown, info?: { kind?: string }): Promise<void> => {
     if (replyFinalOnly && info?.kind && info.kind !== "final") return;
     const typed = payload as { text?: string; mediaUrl?: string; mediaUrls?: string[] } | undefined;
@@ -838,21 +859,60 @@ async function dispatchToAgent(params: {
     for (const url of localMediaResult.mediaUrls) addMedia(url);
 
     if (trimmed) {
-      const converted = textApi?.convertMarkdownTables
-        ? textApi.convertMarkdownTables(trimmed, resolvedTableMode)
-        : trimmed;
-      const chunks = chunkText(converted);
-      for (const chunk of chunks) {
-        const result = await qqbotOutbound.sendText({
-          cfg: { channels: { qqbot: qqCfg } },
-          to: target.to,
-          text: chunk,
-          replyToId: inbound.messageId,
-        });
-        if (result.error) {
-          logger.error(`sendText failed: ${result.error}`);
+      // 检测思考过程分隔符，尽早发送思考部分
+      if (!thinkingSent) {
+        const sepMatch = trimmed.match(/\n+\s*---\s*\n+/);
+        if (sepMatch && sepMatch.index !== undefined) {
+          const before = trimmed.slice(0, sepMatch.index).trim();
+          const after = trimmed.slice(sepMatch.index + sepMatch[0].length).trim();
+          if (before.includes("💭") || before.includes("思考过程")) {
+            thinkingSent = true;
+            // 先发思考过程
+            logger.info(`[thinking-split] 发送思考过程 (${before.length} chars)`);
+            await sendTextChunked(before);
+            // 再发正式回复
+            if (after) {
+              logger.info(`[thinking-split] 发送正式回复 (${after.length} chars)`);
+              await sendTextChunked(after);
+            }
+            // 跳过下面的默认发送逻辑
+            // 继续处理媒体
+            for (const mediaUrl of mediaQueue) {
+              const result = await qqbotOutbound.sendMedia({
+                cfg: { channels: { qqbot: qqCfg } },
+                to: target.to,
+                mediaUrl,
+                replyToId: inbound.messageId,
+              });
+              if (result.error) {
+                logger.error(`sendMedia failed: ${result.error}`);
+                const fallback = buildMediaFallbackText(mediaUrl, result.error);
+                const fallbackResult = await qqbotOutbound.sendText({
+                  cfg: { channels: { qqbot: qqCfg } },
+                  to: target.to,
+                  text: fallback,
+                  replyToId: inbound.messageId,
+                });
+                if (fallbackResult.error) {
+                  logger.error(`sendText fallback failed: ${fallbackResult.error}`);
+                }
+              }
+            }
+            return;
+          }
+        }
+        // 如果这个 deliver 只包含思考内容（有💭但还没有---分隔符），立即发送
+        if (trimmed.includes("💭") || trimmed.includes("思考过程")) {
+          if (info?.kind !== "final") {
+            thinkingSent = true;
+            logger.info(`[thinking-early] 提前发送思考过程 (${trimmed.length} chars)`);
+            await sendTextChunked(trimmed);
+            return;
+          }
         }
       }
+
+      await sendTextChunked(trimmed);
     }
 
     for (const mediaUrl of mediaQueue) {

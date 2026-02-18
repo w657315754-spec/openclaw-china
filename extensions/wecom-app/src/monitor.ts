@@ -728,21 +728,49 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
           current.finished = true;
           current.updatedAt = Date.now();
 
-          // 如果支持主动发送，推送完整回复
+          // 如果支持主动发送，推送回复
           if (target.account.canSendActive && (senderId || chatid) && current.content.trim()) {
             try {
-              const formattedText = stripMarkdown(current.content);
-              const chunks = splitMessageByBytes(formattedText, 2048);
+              const fullContent = current.content;
+              const dest = chatid ? { chatid } : { userId: senderId };
 
-              // 逐段发送完整内容
-              for (const chunk of chunks) {
-                await sendWecomAppMessage(
-                  target.account,
-                  chatid ? { chatid } : { userId: senderId },
-                  chunk
-                );
+              // 用宽松匹配检测思考过程
+              // 格式: 💭 思考过程：\n...\n\n---\n\n...
+              // 但 appendStreamContent 会在 chunk 间插入 \n\n，所以用正则匹配
+              let thinkingPart = "";
+              let replyPart = fullContent;
+
+              // 匹配 --- 分隔线（前后可能有不同数量的换行/空白）
+              const sepMatch = fullContent.match(/\n+\s*---\s*\n+/);
+              if (sepMatch && sepMatch.index !== undefined) {
+                const before = fullContent.slice(0, sepMatch.index).trim();
+                const after = fullContent.slice(sepMatch.index + sepMatch[0].length).trim();
+                // 确认前半部分包含思考标记
+                if (before.includes("💭") || before.includes("思考过程")) {
+                  thinkingPart = before;
+                  replyPart = after;
+                }
               }
-              logger.info(`主动发送完成: streamId=${streamId}, 共 ${chunks.length} 段`);
+
+              // 第一条：发送思考过程
+              if (thinkingPart) {
+                const formattedThinking = stripMarkdown(thinkingPart);
+                const thinkChunks = splitMessageByBytes(formattedThinking, 2048);
+                for (const chunk of thinkChunks) {
+                  await sendWecomAppMessage(target.account, dest, chunk);
+                }
+                logger.info(`思考过程已发送: streamId=${streamId}, 共 ${thinkChunks.length} 段`);
+              }
+
+              // 第二条：发送正式回复
+              if (replyPart) {
+                const formattedReply = stripMarkdown(replyPart);
+                const replyChunks = splitMessageByBytes(formattedReply, 2048);
+                for (const chunk of replyChunks) {
+                  await sendWecomAppMessage(target.account, dest, chunk);
+                }
+                logger.info(`正式回复已发送: streamId=${streamId}, 共 ${replyChunks.length} 段`);
+              }
             } catch (err) {
               logger.error(`主动发送失败: ${String(err)}`);
             }

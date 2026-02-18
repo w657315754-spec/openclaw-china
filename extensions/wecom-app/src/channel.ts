@@ -404,12 +404,40 @@ export const wecomAppPlugin = {
       }
 
       try {
-        const result = await sendWecomAppMessage(account, target, params.text);
+        // 解析 <thinking> 标签，拆分为思考部分和正式回复
+        const thinkingMatch = params.text.match(/<thinking>([\s\S]*?)<\/thinking>/);
+        let thinkingText = "";
+        let replyText = params.text;
+
+        if (thinkingMatch) {
+          thinkingText = thinkingMatch[1].trim();
+          replyText = params.text.replace(/<thinking>[\s\S]*?<\/thinking>/, "").trim();
+        }
+
+        const msgids: string[] = [];
+
+        // 先发送思考过程（如果有）
+        if (thinkingText) {
+          const thinkResult = await sendWecomAppMessage(account, target, `💭 思考过程：\n\n${thinkingText}`);
+          if (thinkResult.msgid) msgids.push(thinkResult.msgid);
+        }
+
+        // 再发送正式回复
+        if (replyText) {
+          const replyResult = await sendWecomAppMessage(account, target, replyText);
+          if (replyResult.msgid) msgids.push(replyResult.msgid);
+          return {
+            channel: "wecom-app",
+            ok: replyResult.ok,
+            messageId: msgids.join(","),
+            error: replyResult.ok ? undefined : new Error(replyResult.errmsg ?? "send failed"),
+          };
+        }
+
         return {
           channel: "wecom-app",
-          ok: result.ok,
-          messageId: result.msgid ?? "",
-          error: result.ok ? undefined : new Error(result.errmsg ?? "send failed"),
+          ok: true,
+          messageId: msgids.join(","),
         };
       } catch (err) {
         return {
