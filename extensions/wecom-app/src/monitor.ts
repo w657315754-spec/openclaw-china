@@ -47,6 +47,7 @@ type StreamState = {
   finished: boolean;
   error?: string;
   content: string;
+  sentUpTo?: number;  // 已发送到的位置（用于跟踪多段思考过程）
 };
 
 const webhookTargets = new Map<string, WecomAppWebhookTarget[]>();
@@ -699,6 +700,46 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
         if (!current) return;
         appendStreamContent(current, text);
         target.statusSink?.({ lastOutboundAt: Date.now() });
+
+        // 调试日志
+        const sentUpTo = current.sentUpTo || 0;
+        logger.info(`[onChunk] streamId=${streamId}, contentLen=${current.content.length}, sentUpTo=${sentUpTo}, canSendActive=${target.account.canSendActive}, senderId=${senderId}, chatid=${chatid}`);
+
+        // 提前发送思考过程（类似 QQ 的 thinking-early 功能）
+        // 每次检测到 --- 分隔符就发送前面未发送的内容，支持多段思考过程
+        if (target.account.canSendActive && (senderId || chatid)) {
+          const fullContent = current.content;
+          const unsentContent = fullContent.slice(sentUpTo);
+          
+          // 检查未发送内容中是否有完整的思考段落（以 --- 结束）
+          const sepMatch = unsentContent.match(/^([\s\S]*?)(\n+\s*---\s*\n+)/);
+          if (sepMatch && sepMatch[1].trim()) {
+            const segmentToSend = sepMatch[1].trim();
+            const sepLength = sepMatch[2].length;
+            
+            // 更新已发送位置（包括 --- 分隔符）
+            current.sentUpTo = sentUpTo + sepMatch[1].length + sepLength;
+            
+            logger.info(`[thinking-early] 检测到完整段落，准备发送 (${segmentToSend.length} chars)`);
+            const dest = chatid ? { chatid } : { userId: senderId };
+            
+            // 使用 Promise 链而不是 await，避免阻塞
+            const formattedSegment = stripMarkdown(segmentToSend);
+            const chunks = splitMessageByBytes(formattedSegment, 2048);
+            
+            (async () => {
+              try {
+                for (let i = 0; i < chunks.length; i++) {
+                  if (i > 0) await new Promise(r => setTimeout(r, 500)); // 分段之间延迟 500ms
+                  await sendWecomAppMessage(target.account, dest, chunks[i]);
+                }
+                logger.info(`[thinking-early] 提前发送完成 (${segmentToSend.length} chars, ${chunks.length} chunks)`);
+              } catch (err) {
+                logger.error(`[thinking-early] 发送失败: ${String(err)}`);
+              }
+            })();
+          }
+        }
       },
       onError: (err: unknown) => {
         const current = streams.get(streamId);
@@ -734,42 +775,25 @@ export async function handleWecomAppWebhookRequest(req: IncomingMessage, res: Se
               const fullContent = current.content;
               const dest = chatid ? { chatid } : { userId: senderId };
 
-              // 用宽松匹配检测思考过程
-              // 格式: 💭 思考过程：\n...\n\n---\n\n...
-              // 但 appendStreamContent 会在 chunk 间插入 \n\n，所以用正则匹配
-              let thinkingPart = "";
-              let replyPart = fullContent;
+              // 分离思考过程和正式回复
+              // 优先用 --- 分隔符，如果没有则用启发式方法
+              // 简化逻辑：只发送 sentUpTo 之后未发送的内容
+              // 前面的内容已经在 onChunk 中按 --- 分段发送了
+              const sentUpTo = current.sentUpTo || 0;
+              const remainingContent = fullContent.slice(sentUpTo).trim();
+              
+              logger.info(`最终发送: streamId=${streamId}, fullLen=${fullContent.length}, sentUpTo=${sentUpTo}, remainingLen=${remainingContent.length}`);
 
-              // 匹配 --- 分隔线（前后可能有不同数量的换行/空白）
-              const sepMatch = fullContent.match(/\n+\s*---\s*\n+/);
-              if (sepMatch && sepMatch.index !== undefined) {
-                const before = fullContent.slice(0, sepMatch.index).trim();
-                const after = fullContent.slice(sepMatch.index + sepMatch[0].length).trim();
-                // 确认前半部分包含思考标记
-                if (before.includes("💭") || before.includes("思考过程")) {
-                  thinkingPart = before;
-                  replyPart = after;
-                }
-              }
-
-              // 第一条：发送思考过程
-              if (thinkingPart) {
-                const formattedThinking = stripMarkdown(thinkingPart);
-                const thinkChunks = splitMessageByBytes(formattedThinking, 2048);
-                for (const chunk of thinkChunks) {
-                  await sendWecomAppMessage(target.account, dest, chunk);
-                }
-                logger.info(`思考过程已发送: streamId=${streamId}, 共 ${thinkChunks.length} 段`);
-              }
-
-              // 第二条：发送正式回复
-              if (replyPart) {
-                const formattedReply = stripMarkdown(replyPart);
+              if (remainingContent) {
+                const formattedReply = stripMarkdown(remainingContent);
                 const replyChunks = splitMessageByBytes(formattedReply, 2048);
-                for (const chunk of replyChunks) {
-                  await sendWecomAppMessage(target.account, dest, chunk);
+                for (let i = 0; i < replyChunks.length; i++) {
+                  if (i > 0) await new Promise(r => setTimeout(r, 500)); // 分段之间延迟 500ms
+                  await sendWecomAppMessage(target.account, dest, replyChunks[i]);
                 }
-                logger.info(`正式回复已发送: streamId=${streamId}, 共 ${replyChunks.length} 段`);
+                logger.info(`最终回复已发送: streamId=${streamId}, 共 ${replyChunks.length} 段`);
+              } else {
+                logger.info(`无剩余内容需要发送: streamId=${streamId}`);
               }
             } catch (err) {
               logger.error(`主动发送失败: ${String(err)}`);

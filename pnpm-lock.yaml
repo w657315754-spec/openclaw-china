@@ -16,13 +16,13 @@ importers:
         version: 2.1.4
     devDependencies:
       '@types/node':
-        specifier: ^22.0.0
+        specifier: ^22.19.7
         version: 22.19.7
       oxlint:
         specifier: ^0.16.0
         version: 0.16.12
       typescript:
-        specifier: ^5.7.0
+        specifier: ^5.9.3
         version: 5.9.3
 
   extensions/dingtalk:
@@ -163,7 +163,7 @@ importers:
         version: 2.1.9(@types/node@22.19.7)
       zod:
         specifier: ^3.23.0
-        version: 3.25.76
+        version: 3.23.8
 
   packages/channels:
     dependencies:
@@ -3993,6 +3993,9 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4
 
+  zod@3.23.8:
+    resolution: {integrity: sha512-XBx9AXhXktjUqnepgTiE5flcKIYWi/rme0Eaj+5Y0lftuGBq+jyRu/md4WnuxqgP1ubdpNCsYEYPxrzVHD8d6g==}
+
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
@@ -5070,8 +5073,8 @@ snapshots:
 
   '@mistralai/mistralai@1.10.0':
     dependencies:
-      zod: 3.25.76
-      zod-to-json-schema: 3.25.1(zod@3.25.76)
+      zod: 3.23.8
+      zod-to-json-schema: 3.25.1(zod@3.23.8)
 
   '@mozilla/readability@0.6.0': {}
 
@@ -8273,13 +8276,15 @@ snapshots:
 
   yoctocolors@2.1.2: {}
 
-  zod-to-json-schema@3.25.1(zod@3.25.76):
+  zod-to-json-schema@3.25.1(zod@3.23.8):
     dependencies:
-      zod: 3.25.76
+      zod: 3.23.8
 
   zod-to-json-schema@3.25.1(zod@4.3.6):
     dependencies:
       zod: 4.3.6
+
+  zod@3.23.8: {}
 
   zod@3.25.76: {}
 
